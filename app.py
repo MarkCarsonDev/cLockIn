@@ -142,7 +142,7 @@ class MenuApp(rumps.App):
     def __init__(self):
         super(MenuApp, self).__init__("cLockIn", quit_button=None)
         if DEFAULT_TITLE != "": self.title = DEFAULT_TITLE
-        self.icon = "icon2.png"
+        self.icon = "icon.png"
         self.credentials = None
         self.calendar_service = None
         self.current_event = None
@@ -287,7 +287,7 @@ class MenuApp(rumps.App):
                 self.rpc.update(
                     details=self.current_event['summary'],
                     start=int(start_time.timestamp()),
-                    large_image="icon2", # Replace with image key of choice
+                    large_image="icon", # Replace with image key of choice
                     large_text="Locked in",
                 )
 

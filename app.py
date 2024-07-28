@@ -9,11 +9,17 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 import subprocess
-from Cocoa import NSTextField, NSApp, NSWindow, NSRect, NSButton, NSObject, NSBackingStoreBuffered,\
-      NSPoint, NSWindowCollectionBehaviorMoveToActiveSpace \
-    # , NSWindowCollectionBehaviorTransient, NSWindowCollectionBehaviorFullScreenAuxiliary, \
-    #     NSWindowCollectionBehaviorParticipatesInCycle, NSWindowCollectionBehaviorCanJoinAllSpaces
-from Quartz import CGShieldingWindowLevel, kCGScreenSaverWindowLevel
+from Cocoa import NSTextField, NSApp, NSWindow, NSRect, NSButton, NSObject, NSBackingStoreBuffered, NSPoint, NSWindowCollectionBehaviorMoveToActiveSpace
+from Quartz import CGShieldingWindowLevel
+from pypresence import Presence
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv('.env.local')
+try:
+    DISCORD_APP_CLIENT_ID = os.getenv('DISCORD_APP_CLIENT_ID')
+except:
+    DISCORD_APP_CLIENT_ID = None
 
 # Path to the OAuth 2.0 client secrets file downloaded from the Google Cloud Console
 CLIENT_SECRETS_FILE = 'google_client_secrets.json'
@@ -42,15 +48,7 @@ class TextInputWindow(NSObject):
             False
         )
         self.window.setLevel_(CGShieldingWindowLevel() + 1)  # Floating window above all others
-        # self.window.setLevel_(kCGScreenSaverWindowLevel + 1)
-        self.window.setCollectionBehavior_(\
-                                           NSWindowCollectionBehaviorMoveToActiveSpace 
-                                        # #    NSWindowCollectionBehaviorTransient | 
-                                        #    NSWindowCollectionBehaviorFullScreenAuxiliary |
-                                        #    NSWindowCollectionBehaviorCanJoinAllSpaces | 
-                                        #    NSWindowCollectionBehaviorParticipatesInCycle | 
-                                           )
-        # self.window.setCollectionBehavior_(NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorMoveToActiveSpace)
+        self.window.setCollectionBehavior_(NSWindowCollectionBehaviorMoveToActiveSpace)
         self.window.setTitleVisibility_(1)  # Hide title bar
         self.window.setTitlebarAppearsTransparent_(True)
         self.window.setBackgroundColor_(objc.nil)
@@ -59,7 +57,6 @@ class TextInputWindow(NSObject):
         self.window.setHasShadow_(True)
         self.window.setReleasedWhenClosed_(False)
         self.window.setCanHide_(False)
-
 
         # get screen dimensions
         screen = self.window.screen()
@@ -79,32 +76,18 @@ class TextInputWindow(NSObject):
         
         self.text_input = NSTextField.alloc().initWithFrame_(((0, 0), (400, 30)))
         self.text_input.setPlaceholderString_("What are you working on?")
-        # give text input rounded corners
         self.text_input.setBezeled_(True)
         self.text_input.setBezelStyle_(1)
         self.text_input.setDrawsBackground_(False)
         self.text_input.setFocusRingType_(1)
-        # draw on very top
         self.text_input.setWantsLayer_(True)
         self.text_input.layer().setZPosition_(3)
-
-
-        # allow selection of text
         self.text_input.setSelectable_(True)
-        # allow cmd a to select all text
         self.text_input.setAllowsEditingTextAttributes_(True)
-        # allow text to be edited
         self.text_input.setEditable_(True)
-        # allow text to be highlighted
         self.text_input.setSelectable_(True)
-        # allow text to be copied
         self.text_input.setSelectable_(True)
-
-        # disable text wrapping (scroll horizontally)
         self.text_input.cell().setWraps_(False)
-
-
-
 
         content_view.addSubview_(self.text_input)
 
@@ -123,10 +106,6 @@ class TextInputWindow(NSObject):
         cancel_button.setTarget_(self)
         cancel_button.setAction_("cancelButtonClicked:")
         content_view.addSubview_(cancel_button)
-
-        # # Hide them (for now ;) )
-        # start_button.setHidden_(True)
-        # cancel_button.setHidden_(True)
 
         self.window.makeKeyAndOrderFront_(None)
         NSApp.activateIgnoringOtherApps_(True)
@@ -166,6 +145,17 @@ class MenuApp(rumps.App):
         self.text_input_window = None
         self.calendar_id = None
 
+        self.discord_enabled = bool(DISCORD_APP_CLIENT_ID)
+        self.rpc = None
+
+        if self.discord_enabled:
+            try:
+                self.rpc = Presence(DISCORD_APP_CLIENT_ID)
+                self.rpc.connect()
+            except Exception as e:
+                print(f"Failed to connect to Discord: {e}")
+                self.discord_enabled = False
+
         print("Initializing application...")
         self.load_credentials()
 
@@ -173,10 +163,18 @@ class MenuApp(rumps.App):
         self.start_item = rumps.MenuItem("⏵", callback=self.start_event)
         self.pause_item = rumps.MenuItem("⏸", callback=self.pause_event)
         self.stop_item = rumps.MenuItem("⏹", callback=self.stop_event)
+
         self.run_at_startup_item = rumps.MenuItem("Run at Startup", callback=self.toggle_run_at_startup)
         self.run_at_startup_item.state = self.is_run_at_startup_enabled()
 
-        self.menu = [self.sign_in_item, self.run_at_startup_item, None, rumps.MenuItem("Quit", callback=rumps.quit_application)]
+        self.show_in_discord_item = rumps.MenuItem("Show in Discord", callback=self.toggle_discord_presence)
+        self.show_in_discord_item.state = self.discord_enabled
+
+        self.preferences_menu = rumps.MenuItem("Preferences")
+        self.preferences_menu.add(self.run_at_startup_item)
+        self.preferences_menu.add(self.show_in_discord_item)
+
+        self.menu = [self.sign_in_item, self.preferences_menu, None, rumps.MenuItem("Quit", callback=rumps.quit_application)]
 
         self.update_button_states()
         self.timer = rumps.Timer(self.update_title, 15)  # Timer to update the title every second
@@ -205,7 +203,7 @@ class MenuApp(rumps.App):
         print("Updating button states...")
         self.menu.clear()
         self.menu["Sign in with Google"] = self.sign_in_item
-        self.menu["Run at Startup"] = self.run_at_startup_item
+        self.menu["Preferences"] = self.preferences_menu
         self.menu.add(None)  # Add a separator
         
         if self.credentials and self.credentials.valid:
@@ -238,6 +236,8 @@ class MenuApp(rumps.App):
     def update_title(self, _=None):
         if not self.current_event:
             self.title = DEFAULT_TITLE
+            if self.rpc and self.discord_enabled:
+                self.rpc.clear()
             return
         
         print("Updating title...")
@@ -247,6 +247,16 @@ class MenuApp(rumps.App):
             hours, remainder = divmod(elapsed_time.total_seconds(), 3600)
             minutes, remainder_s = divmod(remainder, 60)
             self.title = f"{self.current_event['summary']} • for {int(hours)}h {int(minutes)}m" if hours >= 1 else f"{self.current_event['summary']} • for {int(minutes)}m"
+
+            # Update Discord presence
+            if self.rpc and self.discord_enabled:
+                self.rpc.update(
+                    details=self.current_event['summary'],
+                    start=int(start_time.timestamp()),
+                    large_image="icon2",  # Replace with your image key
+                    large_text="Clock-In App",
+                )
+
         elif self.current_event and not self.current_event['start']['dateTime']:
             self.title = f"{self.current_event['summary']} • ⏸"
         else:
@@ -381,6 +391,8 @@ class MenuApp(rumps.App):
 
         self.current_event = None
         self.update_button_states()
+        if self.rpc and self.discord_enabled:
+            self.rpc.clear()
         print("Event stopped.")
 
     def add_event_to_google_calendar(self):
@@ -421,6 +433,26 @@ class MenuApp(rumps.App):
         if os.path.exists(SHELL_SCRIPT_FILE):
             os.remove(SHELL_SCRIPT_FILE)
         print("Run at startup disabled.")
+
+    def toggle_discord_presence(self, sender):
+        print("Toggling Discord presence...")
+        self.discord_enabled = not self.discord_enabled
+        sender.state = self.discord_enabled
+
+        if self.discord_enabled and self.rpc is None:
+            try:
+                self.rpc = Presence(DISCORD_APP_CLIENT_ID)
+                self.rpc.connect()
+            except Exception as e:
+                print(f"Failed to connect to Discord: {e}")
+                self.discord_enabled = False
+                sender.state = False
+        elif not self.discord_enabled and self.rpc:
+            self.rpc.clear()
+            self.rpc.close()
+            self.rpc = None
+
+        print(f"Discord presence toggled to {'enabled' if self.discord_enabled else 'disabled'}.")
 
     def create_shell_script(self):
         print("Creating shell script...")

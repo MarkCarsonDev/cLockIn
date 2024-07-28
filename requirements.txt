@@ -5,3 +5,6 @@ google-auth-httplib2
 google-api-python-client
 python-dateutil
 pyobjc
+pypresence
+python-dotenv
+

@@ -439,7 +439,7 @@ class MenuApp(rumps.App):
 
     def is_run_at_startup_enabled(self):
         print("Checking if run at startup is enabled...")
-        enabled = os.path.exists(LAUNCH_AGENT_FILE)
+        enabled = os.path.exists(LAUNCH_AGENT_FILE) and os.path.exists(SHELL_SCRIPT_FILE)
         print(f"Run at startup enabled: {enabled}")
         return enabled
 
@@ -490,7 +490,9 @@ class MenuApp(rumps.App):
 
     def create_shell_script(self):
         print("Creating shell script...")
+        app_directory = os.path.dirname(os.path.abspath(__file__))
         script_content = f"""#!/bin/bash
+cd {app_directory}
 source venv/bin/activate
 python3.12 app.py
 """
@@ -514,7 +516,7 @@ python3.12 app.py
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <false/>
     <key>StandardOutPath</key>
     <string>/tmp/clockinapp.out</string>
     <key>StandardErrorPath</key>

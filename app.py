@@ -61,7 +61,7 @@ class TextInputWindow(NSObject):
         cancel_button = NSButton.alloc().initWithFrame_(((310, 10), (80, 24)))
         cancel_button.setTitle_("Cancel")
         cancel_button.setBezelStyle_(4)
-        cancel_button.setKeyEquivalent_("\033")  # Escape key triggers the button
+        cancel_button.setKeyEquivalent_("\x1b")  # Escape key triggers the button
         cancel_button.setTarget_(self)
         cancel_button.setAction_("cancelButtonClicked:")
         content_view.addSubview_(cancel_button)
@@ -72,24 +72,25 @@ class TextInputWindow(NSObject):
 
     def startButtonClicked_(self, sender):
         print(f"Start button clicked: {sender}")
-        self.window.close()
         self.callback(self.text_input.stringValue())
+        self.close_window()
 
     def cancelButtonClicked_(self, sender):
         print(f"Cancel button clicked: {sender}")
-        self.window.close()
         self.callback(None)
+        self.close_window()
 
     def windowDidResignKey_(self, notification):
         print("Window resigned key, closing...")
-        self.close_window()
         self.callback(None)
+        self.close_window()
 
     def close_window(self):
         if self.window:
+            print(f"Closing text input window... {self}")
             self.window.orderOut_(None)
-            self.window.close()
-            self.window = None
+            print("Text input window closed.")
+
 
 class MenuApp(rumps.App):
     def __init__(self):
@@ -166,6 +167,11 @@ class MenuApp(rumps.App):
         self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))  # Add the Quit button at the end
         self.update_title()
         print("Button states updated.")
+        # print FULL debug info
+        print(f'FULL DEBUG\n\n\t\t\t----:\ncurrent_event: {self.current_event}\n\
+              window: {self.text_input_window}\n\
+                                    ')
+        
 
     def update_title(self, _=None):
         if not self.current_event:
@@ -228,12 +234,14 @@ class MenuApp(rumps.App):
 
     def set_event_title(self):
         print("Setting event title...")
-        # if self.text_input_window:
-        #     self.text_input_window.close_window()
+        print(f"self.text_input_window: {self.text_input_window}")
 
-        # create a new window
+        if self.text_input_window:
+            print("Window already exists, closing it first.")
+            # override the window reference to None
+        
         self.text_input_window = TextInputWindow.alloc().initWithCallback_(self.handle_window_response)
-        # show the window
+        print(f"self.text_input_window: {self.text_input_window}")
         self.text_input_window.performSelectorOnMainThread_withObject_waitUntilDone_("createWindow", None, True)
 
         print("Event title set.")
@@ -295,6 +303,7 @@ class MenuApp(rumps.App):
 
 
     def stop_event(self, _):
+        # self.text_input_window = None
         print("Stopping event...")
         if not self.credentials:
             print("Not signed in, showing alert.")

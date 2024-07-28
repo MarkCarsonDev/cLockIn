@@ -1,2 +1,4 @@
 google_client_secrets.json
 venv
+run_clockin_app.sh
+token.json

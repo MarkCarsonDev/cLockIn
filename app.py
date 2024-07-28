@@ -9,7 +9,11 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 import subprocess
-from Cocoa import NSTextField, NSApp, NSApplicationActivationPolicyRegular, NSWindow, NSRect, NSView, NSButton, NSObject, NSBackingStoreBuffered, NSPoint
+from Cocoa import NSTextField, NSApp, NSWindow, NSRect, NSButton, NSObject, NSBackingStoreBuffered,\
+      NSPoint, NSWindowCollectionBehaviorMoveToActiveSpace \
+    # , NSWindowCollectionBehaviorTransient, NSWindowCollectionBehaviorFullScreenAuxiliary, \
+    #     NSWindowCollectionBehaviorParticipatesInCycle, NSWindowCollectionBehaviorCanJoinAllSpaces
+from Quartz import CGShieldingWindowLevel, kCGScreenSaverWindowLevel
 
 # Path to the OAuth 2.0 client secrets file downloaded from the Google Cloud Console
 CLIENT_SECRETS_FILE = 'google_client_secrets.json'
@@ -32,25 +36,79 @@ class TextInputWindow(NSObject):
     def createWindow(self):
         print("Creating text input window...")
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSRect((0, 0), (400, 60)),
+            NSRect((0, 0), (400, 0)),
             1 << 0,  # NSWindowStyleMaskBorderless
             NSBackingStoreBuffered,
             False
         )
-        self.window.setLevel_(3)  # Floating window
+        self.window.setLevel_(CGShieldingWindowLevel() + 1)  # Floating window above all others
+        # self.window.setLevel_(kCGScreenSaverWindowLevel + 1)
+        self.window.setCollectionBehavior_(\
+                                           NSWindowCollectionBehaviorMoveToActiveSpace 
+                                        # #    NSWindowCollectionBehaviorTransient | 
+                                        #    NSWindowCollectionBehaviorFullScreenAuxiliary |
+                                        #    NSWindowCollectionBehaviorCanJoinAllSpaces | 
+                                        #    NSWindowCollectionBehaviorParticipatesInCycle | 
+                                           )
+        # self.window.setCollectionBehavior_(NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorMoveToActiveSpace)
         self.window.setTitleVisibility_(1)  # Hide title bar
         self.window.setTitlebarAppearsTransparent_(True)
         self.window.setBackgroundColor_(objc.nil)
         self.window.setOpaque_(False)
-        self.window.center()  # Center the window on the screen
+        self.window.setMovable_(False)
+        self.window.setHasShadow_(True)
+        self.window.setReleasedWhenClosed_(False)
+        self.window.setCanHide_(False)
+
+
+        # get screen dimensions
+        screen = self.window.screen()
+        screen_frame = screen.frame()
+        screen_width = screen_frame.size.width
+        screen_height = screen_frame.size.height
+        # get window dimensions
+        window_frame = self.window.frame()
+        window_width = window_frame.size.width
+        window_height = window_frame.size.height
+        # calculate the position of the window
+        x = (screen_width - window_width) / 2
+        y = screen_height - window_height - 30
+        self.window.setFrameOrigin_(NSPoint(x, y))
 
         content_view = self.window.contentView()
         
-        self.text_input = NSTextField.alloc().initWithFrame_(((10, 50), (380, 24)))
+        self.text_input = NSTextField.alloc().initWithFrame_(((0, 0), (400, 30)))
         self.text_input.setPlaceholderString_("What are you working on?")
+        # give text input rounded corners
+        self.text_input.setBezeled_(True)
+        self.text_input.setBezelStyle_(1)
+        self.text_input.setDrawsBackground_(False)
+        self.text_input.setFocusRingType_(1)
+        # draw on very top
+        self.text_input.setWantsLayer_(True)
+        self.text_input.layer().setZPosition_(3)
+
+
+        # allow selection of text
+        self.text_input.setSelectable_(True)
+        # allow cmd a to select all text
+        self.text_input.setAllowsEditingTextAttributes_(True)
+        # allow text to be edited
+        self.text_input.setEditable_(True)
+        # allow text to be highlighted
+        self.text_input.setSelectable_(True)
+        # allow text to be copied
+        self.text_input.setSelectable_(True)
+
+        # disable text wrapping (scroll horizontally)
+        self.text_input.cell().setWraps_(False)
+
+
+
+
         content_view.addSubview_(self.text_input)
 
-        start_button = NSButton.alloc().initWithFrame_(((230, 10), (80, 24)))
+        start_button = NSButton.alloc().initWithFrame_(((230, 110), (80, 24)))
         start_button.setTitle_("Start")
         start_button.setBezelStyle_(4)
         start_button.setKeyEquivalent_("\r")  # Enter key triggers the button
@@ -58,13 +116,17 @@ class TextInputWindow(NSObject):
         start_button.setAction_("startButtonClicked:")
         content_view.addSubview_(start_button)
 
-        cancel_button = NSButton.alloc().initWithFrame_(((310, 10), (80, 24)))
+        cancel_button = NSButton.alloc().initWithFrame_(((310, 110), (80, 24)))
         cancel_button.setTitle_("Cancel")
         cancel_button.setBezelStyle_(4)
         cancel_button.setKeyEquivalent_("\x1b")  # Escape key triggers the button
         cancel_button.setTarget_(self)
         cancel_button.setAction_("cancelButtonClicked:")
         content_view.addSubview_(cancel_button)
+
+        # # Hide them (for now ;) )
+        # start_button.setHidden_(True)
+        # cancel_button.setHidden_(True)
 
         self.window.makeKeyAndOrderFront_(None)
         NSApp.activateIgnoringOtherApps_(True)
@@ -238,7 +300,7 @@ class MenuApp(rumps.App):
 
         if self.text_input_window:
             print("Window already exists, closing it first.")
-            # override the window reference to None
+            self.text_input_window.close_window()
         
         self.text_input_window = TextInputWindow.alloc().initWithCallback_(self.handle_window_response)
         print(f"self.text_input_window: {self.text_input_window}")

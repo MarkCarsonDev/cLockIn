@@ -17,6 +17,8 @@ SCOPES = ['openid', 'https://www.googleapis.com/auth/calendar', 'https://www.goo
 CREDENTIALS_FILE = 'token.json'
 LAUNCH_AGENT_FILE = os.path.expanduser('~/Library/LaunchAgents/com.yourusername.clockinapp.plist')
 SHELL_SCRIPT_FILE = 'run_clockin_app.sh'
+DEFAULT_TITLE = ""
+CALENDAR_TITLE = "cLockIn"
 
 class TextInputWindow(NSObject):
     def initWithCallback_(self, callback):
@@ -30,7 +32,7 @@ class TextInputWindow(NSObject):
     def createWindow(self):
         print("Creating text input window...")
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSRect((0, 0), (400, 100)),
+            NSRect((0, 0), (400, 60)),
             1 << 0,  # NSWindowStyleMaskBorderless
             NSBackingStoreBuffered,
             False
@@ -48,7 +50,7 @@ class TextInputWindow(NSObject):
         self.text_input.setPlaceholderString_("What are you working on?")
         content_view.addSubview_(self.text_input)
 
-        start_button = NSButton.alloc().initWithFrame_(((250, 10), (80, 24)))
+        start_button = NSButton.alloc().initWithFrame_(((230, 10), (80, 24)))
         start_button.setTitle_("Start")
         start_button.setBezelStyle_(4)
         start_button.setKeyEquivalent_("\r")  # Enter key triggers the button
@@ -56,7 +58,7 @@ class TextInputWindow(NSObject):
         start_button.setAction_("startButtonClicked:")
         content_view.addSubview_(start_button)
 
-        cancel_button = NSButton.alloc().initWithFrame_(((340, 10), (80, 24)))
+        cancel_button = NSButton.alloc().initWithFrame_(((310, 10), (80, 24)))
         cancel_button.setTitle_("Cancel")
         cancel_button.setBezelStyle_(4)
         cancel_button.setTarget_(self)
@@ -91,8 +93,8 @@ class TextInputWindow(NSObject):
 class MenuApp(rumps.App):
     def __init__(self):
         super(MenuApp, self).__init__("Clock-In App", quit_button=None)
-        self.title = "cLockIn"
-        self.icon = "icon.png"
+        if DEFAULT_TITLE != "": self.title = DEFAULT_TITLE
+        self.icon = "icon2.png"
         self.credentials = None
         self.calendar_service = None
         self.current_event = None
@@ -113,7 +115,7 @@ class MenuApp(rumps.App):
         self.menu = [self.sign_in_item, self.run_at_startup_item, None, rumps.MenuItem("Quit", callback=rumps.quit_application)]
 
         self.update_button_states()
-        self.timer = rumps.Timer(self.update_title, 1)  # Timer to update the title every second
+        self.timer = rumps.Timer(self.update_title, 15)  # Timer to update the title every second
         self.timer.start()
         print("Application initialized.")
 
@@ -166,7 +168,7 @@ class MenuApp(rumps.App):
 
     def update_title(self, _=None):
         if not self.current_event:
-            self.title = "cLockIn"
+            self.title = DEFAULT_TITLE
             return
         
         print("Updating title...")
@@ -174,12 +176,12 @@ class MenuApp(rumps.App):
             start_time = parser.isoparse(self.current_event['start']['dateTime'])
             elapsed_time = datetime.datetime.now(datetime.timezone.utc) - start_time
             hours, remainder = divmod(elapsed_time.total_seconds(), 3600)
-            minutes, _ = divmod(remainder, 60)
-            self.title = f"{self.current_event['summary']} • for {int(hours)}h{int(minutes)}m"
+            minutes, remainder_s = divmod(remainder, 60)
+            self.title = f"{self.current_event['summary']} • for {int(hours)}h {int(minutes)}m" if hours >= 1 else f"{self.current_event['summary']} • for {int(minutes)}m"
         elif self.current_event and not self.current_event['start']['dateTime']:
             self.title = f"{self.current_event['summary']} • ⏸"
         else:
-            self.title = "cLockIn"
+            self.title = DEFAULT_TITLE
         print(f"Title updated to: {self.title}")
 
     def sign_in_with_google(self, _):
@@ -210,13 +212,13 @@ class MenuApp(rumps.App):
         print("Creating cLockIn calendar if it doesn't exist...")
         calendar_list = self.calendar_service.calendarList().list().execute()
         for calendar_entry in calendar_list['items']:
-            if calendar_entry['summary'] == 'cLockIn':
+            if calendar_entry['summary'] == CALENDAR_TITLE:
                 self.calendar_id = calendar_entry['id']
                 print(f"cLockIn calendar already exists with ID: {self.calendar_id}")
                 return
 
         calendar = {
-            'summary': 'cLockIn',
+            'summary': CALENDAR_TITLE,
             'timeZone': 'UTC'
         }
         created_calendar = self.calendar_service.calendars().insert(body=calendar).execute()
@@ -225,11 +227,16 @@ class MenuApp(rumps.App):
 
     def set_event_title(self):
         print("Setting event title...")
-        if self.text_input_window:
-            self.text_input_window.close_window()
+        # if self.text_input_window:
+        #     self.text_input_window.close_window()
+
+        # create a new window
         self.text_input_window = TextInputWindow.alloc().initWithCallback_(self.handle_window_response)
+        # show the window
         self.text_input_window.performSelectorOnMainThread_withObject_waitUntilDone_("createWindow", None, True)
+
         print("Event title set.")
+
 
     def handle_window_response(self, response):
         print(f"Handling window response: {response}")
@@ -240,6 +247,9 @@ class MenuApp(rumps.App):
                 'end': {'dateTime': None, 'timeZone': 'UTC'}
             }
             rumps.notification("Task Set", "Current task set to", response)
+            # Start the event after setting the task
+            self.start_event(None)
+
         self.update_button_states()
         print("Window response handled.")
 
@@ -249,14 +259,18 @@ class MenuApp(rumps.App):
             print("Not signed in, showing alert.")
             rumps.alert("Sign in first")
             return
+        if self.current_event and self.current_event['start']['dateTime']:
+            print("An event is already running. Stopping it first.")
+            self.stop_event(_)  # Pause the current event before starting a new one
         if not self.current_event:
             self.set_event_title()
-            return  # Wait for the event title to be set
+            return
         if not self.current_event or not self.current_event['summary']:
             print("Event summary not set, showing alert.")
             rumps.alert("Set a task first")
             return
         self.current_event['start']['dateTime'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.current_event['end']['dateTime'] = None  # Clear end time if restarting
         rumps.notification("Event Started", "Started working on", self.current_event['summary'])
         self.update_button_states()
         print("Event started.")
@@ -274,9 +288,10 @@ class MenuApp(rumps.App):
         self.current_event['end']['dateTime'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self.add_event_to_google_calendar()
         rumps.notification("Event Paused", "Paused working on", self.current_event['summary'])
-        self.current_event['start']['dateTime'] = None
+        self.current_event['start']['dateTime'] = None  # Mark event as paused
         self.update_button_states()
         print("Event paused.")
+
 
     def stop_event(self, _):
         print("Stopping event...")

@@ -174,10 +174,12 @@ class MenuApp(rumps.App):
 
         self.show_in_discord_item = rumps.MenuItem("Show in Discord", callback=self.toggle_discord_presence)
         self.show_in_discord_item.state = self.discord_enabled
+        self.sign_out_item = rumps.MenuItem("Sign Out", callback=self.sign_out)
 
         self.preferences_menu = rumps.MenuItem("Preferences")
         self.preferences_menu.add(self.run_at_startup_item)
         self.preferences_menu.add(self.show_in_discord_item)
+        self.preferences_menu.add(self.sign_out_item)
 
         self.menu = [self.sign_in_item, self.preferences_menu, None, rumps.MenuItem("Quit", callback=rumps.quit_application)]
 
@@ -201,10 +203,17 @@ class MenuApp(rumps.App):
             with open(CREDENTIALS_FILE, 'r') as token:
                 self.credentials = Credentials.from_authorized_user_info(json.load(token), SCOPES)
             if self.credentials and self.credentials.expired and self.credentials.refresh_token:
-                self.credentials.refresh(Request())
-            self.calendar_service = build('calendar', 'v3', credentials=self.credentials)
-            self.user_email = self.get_user_email()
-            self.create_clockin_calendar()
+                try:
+                    self.credentials.refresh(Request())
+                except Exception as e:
+                    print(f"Failed to refresh credentials: {e}")
+                    self.credentials = None
+            if not self.credentials or not self.credentials.valid:
+                self.sign_in_with_google(None)
+            else:
+                self.calendar_service = build('calendar', 'v3', credentials=self.credentials)
+                self.user_email = self.get_user_email()
+                self.create_clockin_calendar()
         print("Credentials loaded.")
 
     def save_credentials(self):
@@ -212,6 +221,17 @@ class MenuApp(rumps.App):
         with open(CREDENTIALS_FILE, 'w') as token:
             token.write(self.credentials.to_json())
         print("Credentials saved.")
+
+    def sign_out(self, _):
+        print("Signing out...")
+        if os.path.exists(CREDENTIALS_FILE):
+            os.remove(CREDENTIALS_FILE)
+        self.credentials = None
+        self.calendar_service = None
+        self.user_email = None
+        self.update_button_states()
+        rumps.notification("Signed out", "Successfully signed out of Google", "")
+        print("Signed out.")
 
     def update_button_states(self):
         print("Updating button states...")

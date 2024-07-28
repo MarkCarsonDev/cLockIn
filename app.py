@@ -21,11 +21,13 @@ try:
 except:
     DISCORD_APP_CLIENT_ID = None
 
+OS_USERNAME = os.getlogin()
+
 # Path to the OAuth 2.0 client secrets file downloaded from the Google Cloud Console
 CLIENT_SECRETS_FILE = 'google_client_secrets.json'
 SCOPES = ['openid', 'https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']
 CREDENTIALS_FILE = 'token.json'
-LAUNCH_AGENT_FILE = os.path.expanduser('~/Library/LaunchAgents/com.yourusername.clockinapp.plist')
+LAUNCH_AGENT_FILE = os.path.expanduser(f'~/Library/LaunchAgents/com.{OS_USERNAME}.clockinapp.plist')
 SHELL_SCRIPT_FILE = 'run_clockin_app.sh'
 DEFAULT_TITLE = ""
 CALENDAR_TITLE = "cLockIn"
@@ -253,7 +255,7 @@ class MenuApp(rumps.App):
                 self.rpc.update(
                     details=self.current_event['summary'],
                     start=int(start_time.timestamp()),
-                    large_image="icon2",  # Replace with your image key
+                    large_image="icon2", # Replace with image key of choice
                     large_text="Clock-In App",
                 )
 
@@ -472,7 +474,7 @@ python3.12 app.py
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.yourusername.clockinapp</string>
+    <string>com.{OS_USERNAME}.clockinapp</string>
     <key>ProgramArguments</key>
     <array>
         <string>{SHELL_SCRIPT_FILE}</string>

@@ -61,6 +61,7 @@ class TextInputWindow(NSObject):
         cancel_button = NSButton.alloc().initWithFrame_(((310, 10), (80, 24)))
         cancel_button.setTitle_("Cancel")
         cancel_button.setBezelStyle_(4)
+        cancel_button.setKeyEquivalent_("\033")  # Escape key triggers the button
         cancel_button.setTarget_(self)
         cancel_button.setAction_("cancelButtonClicked:")
         content_view.addSubview_(cancel_button)

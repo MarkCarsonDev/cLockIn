@@ -1,6 +1,7 @@
 import rumps
 import datetime
 import os
+import pwd
 import json
 import objc
 from dateutil import parser
@@ -11,6 +12,7 @@ from google.auth.transport.requests import Request
 import subprocess
 from Cocoa import NSTextField, NSApp, NSWindow, NSRect, NSButton, NSObject, NSBackingStoreBuffered, NSPoint, NSWindowCollectionBehaviorMoveToActiveSpace
 from Quartz import CGShieldingWindowLevel
+import AppKit
 from pypresence import Presence
 from dotenv import load_dotenv
 
@@ -21,14 +23,15 @@ try:
 except:
     DISCORD_APP_CLIENT_ID = None
 
-OS_USERNAME = os.getlogin()
+# get macos username
+OS_USERNAME = pwd.getpwuid(os.getuid()).pw_name
 
 # Path to the OAuth 2.0 client secrets file downloaded from the Google Cloud Console
 CLIENT_SECRETS_FILE = 'google_client_secrets.json'
 SCOPES = ['openid', 'https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']
 CREDENTIALS_FILE = 'token.json'
 LAUNCH_AGENT_FILE = os.path.expanduser(f'~/Library/LaunchAgents/com.{OS_USERNAME}.clockinapp.plist')
-SHELL_SCRIPT_FILE = 'run_clockin_app.sh'
+SHELL_SCRIPT_FILE = os.path.abspath(f'run_clockin_app.sh')
 DEFAULT_TITLE = ""
 CALENDAR_TITLE = "cLockIn"
 
@@ -137,7 +140,7 @@ class TextInputWindow(NSObject):
 
 class MenuApp(rumps.App):
     def __init__(self):
-        super(MenuApp, self).__init__("Clock-In App", quit_button=None)
+        super(MenuApp, self).__init__("cLockIn", quit_button=None)
         if DEFAULT_TITLE != "": self.title = DEFAULT_TITLE
         self.icon = "icon2.png"
         self.credentials = None
@@ -182,6 +185,15 @@ class MenuApp(rumps.App):
         self.timer = rumps.Timer(self.update_title, 15)  # Timer to update the title every second
         self.timer.start()
         print("Application initialized.")
+
+        self.set_accessory_mode()
+
+    def set_accessory_mode(self):
+        print("Setting application to accessory mode...")
+        app = AppKit.NSApplication.sharedApplication()
+        app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+        print("Application set to accessory mode.")
+
 
     def load_credentials(self):
         print("Loading credentials...")
@@ -256,7 +268,7 @@ class MenuApp(rumps.App):
                     details=self.current_event['summary'],
                     start=int(start_time.timestamp()),
                     large_image="icon2", # Replace with image key of choice
-                    large_text="Clock-In App",
+                    large_text="Locked in",
                 )
 
         elif self.current_event and not self.current_event['start']['dateTime']:

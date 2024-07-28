@@ -13,7 +13,7 @@ cLockIn is a lightweight macOS menu bar application designed to help you track y
 
 ### Prerequisites
 
-- Python 3.12
+- Python 3.12 (earlier versions likely work but are untested)
 - Google Cloud credentials for Calendar API
 - (Optional) Discord application credentials for rich presence
 
@@ -80,7 +80,7 @@ Once the app is running:
 
 ## Contributing
 
-We welcome contributions from the community! If you have ideas for features or improvements, please feel free to open an issue or submit a pull request.
+I welcome contributions from the community! If you have ideas for features or improvements, please feel free to open an issue or submit a pull request.
 
 ## License
 

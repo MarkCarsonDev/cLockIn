@@ -3,3 +3,4 @@ venv
 run_clockin_app.sh
 token.json
 .env.local
+*.pyc

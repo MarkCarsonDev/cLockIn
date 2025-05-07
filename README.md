@@ -4,10 +4,13 @@ cLockIn is a lightweight macOS menu bar application designed to help you track y
 
 ## Features
 
-- **Task Tracking**: Easily create and manage tasks directly from your menu bar.
+- **Task & Category Management**: Organize your work with categories and tasks for better time tracking.
+- **Global Keyboard Shortcut**: Quickly start tasks from anywhere with a customizable global keyboard shortcut (⌘+⇧+⌃+T by default).
+- **Smart Autocomplete**: Easily navigate through your existing categories and tasks while typing.
 - **Google Calendar Integration**: Sync your tasks with Google Calendar and keep your schedule up-to-date.
 - **Discord Rich Presence**: Optionally show your current task and elapsed time on Discord.
-- **Preferences**: Customize the app to run at startup and control Discord presence visibility.
+- **CSV Export**: Export timesheets for each category in various formats.
+- **Run at Startup**: Automatically launch cLockIn when you log in.
 
 ## Installation
 
@@ -71,12 +74,40 @@ cLockIn is a lightweight macOS menu bar application designed to help you track y
 
 ## Usage
 
-Once the app is running:
+### Getting Started
 
 1. **Sign In with Google**: Click on the menu bar icon and select "Sign in with Google" to authenticate and sync with Google Calendar.
-2. **Start a Task**: Click the play button to create and start a new task. You’ll be prompted to enter the task description.
-3. **Pause/Stop a Task**: Use the pause and stop buttons to manage your current task.
-4. **Preferences**: Access the "Preferences" menu to enable/disable running the app at startup and to control Discord rich presence visibility.
+2. **Start a Task**: Use the global keyboard shortcut (⌘+⇧+⌃+T by default) or click "Start New Task" from the menu bar dropdown.
+
+### Task Input
+
+The task input window supports a powerful syntax for categorizing your work:
+
+- Type normally to create an uncategorized task
+- Start with `@` to enter a category
+- Press `Tab` to cycle through existing categories or tasks
+- Press `Enter` to confirm a selection
+- Press `Escape` to cancel
+
+Examples:
+
+- `@Client A <Enter> Design Homepage <Enter>` - Creates "Design Homepage" task in "Client A" category
+- `@<Tab><Enter> Meeting Notes <Enter>` - Selects first category and creates "Meeting Notes" task in it
+- `<Tab><Tab><Enter>` - Cycles through and selects an existing task
+
+### Managing Tasks
+
+- **Pause/Stop**: Use the menu to pause or stop the current task
+- **Resume**: Select a recent or existing task from the menu to resume it
+- **View Stats**: The menu shows total time spent on each task
+
+### Exporting Data
+
+For each category, you can export time data in various CSV formats:
+
+- **Simple CSV**: Basic summary of total time spent on each task
+- **Detailed CSV**: Breakdown of individual time entries with start/end times
+- **Weekly CSV**: Weekly timesheet with days as columns
 
 ## Contributing
 

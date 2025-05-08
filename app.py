@@ -41,9 +41,9 @@ SHELL_SCRIPT_FILE = os.path.abspath(f'run_clockin_app.sh')
 DEFAULT_TITLE = ""
 CALENDAR_TITLE = "cLockIn"
 
-# Global shortcut key combination
+# # Global shortcut key combination
 SHORTCUT_KEY = 'T'
-SHORTCUT_MODIFIERS = ['CMD', 'SHIFT', 'CTRL']
+SHORTCUT_MODIFIERS = ['CTRL', 'SHIFT', 'CMD']
 
 
 class MenuApp(rumps.App):
@@ -89,6 +89,9 @@ class MenuApp(rumps.App):
 
         print("Initializing enhanced application...")
         self.load_credentials()
+        
+        # CRITICAL FIX: Deactivate any active tasks from previous sessions
+        self.suspend_active_tasks_on_startup()
 
         # Setup menu items
         self.sign_in_item = rumps.MenuItem("Sign in with Google", callback=self.sign_in_with_google)
@@ -102,6 +105,8 @@ class MenuApp(rumps.App):
 
         self.show_in_discord_item = rumps.MenuItem("Show in Discord", callback=self.toggle_discord_presence)
         self.show_in_discord_item.state = self.discord_enabled
+
+        self.view_json_item = rumps.MenuItem("View Time Entry Data", callback=self.open_json_file)
         
         self.keyboard_shortcut_item = rumps.MenuItem(
             f"Keyboard Shortcut ({' + '.join(['⌘', '⇧', '⌃'])} + {SHORTCUT_KEY})", 
@@ -116,6 +121,7 @@ class MenuApp(rumps.App):
         self.preferences_menu.add(self.show_in_discord_item)
         self.preferences_menu.add(self.keyboard_shortcut_item)
         self.preferences_menu.add(self.sign_out_item)
+        self.preferences_menu.add(self.view_json_item)
 
         # Base menu
         self.menu = [
@@ -136,6 +142,18 @@ class MenuApp(rumps.App):
         
         print("Enhanced application initialized.")
         self.set_accessory_mode()
+
+    def suspend_active_tasks_on_startup(self):
+        """Suspend any active tasks from previous sessions to prevent auto-restart"""
+        try:
+            active_task = self.storage.get_active_task()
+            if active_task:
+                print(f"Found active task from previous session: {active_task.name}")
+                active_task.pause()  # This ends the current time entry
+                self.storage.save()
+                print(f"Suspended active task: {active_task.name}")
+        except Exception as e:
+            print(f"Error suspending active tasks: {e}")
 
     def set_accessory_mode(self):
         """Set application to accessory mode (icon only in menu bar)"""
@@ -395,11 +413,7 @@ class MenuApp(rumps.App):
             if not os.path.exists(CLIENT_SECRETS_FILE):
                 error_msg = f"Google client secrets file not found at {CLIENT_SECRETS_FILE}."
                 print(error_msg)
-                rumps.notification(
-                    "Google Sign-In Failed",
-                    error_msg,
-                    "Please download the credentials JSON file from Google Cloud Console."
-                )
+
                 return
             
             flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
@@ -410,7 +424,6 @@ class MenuApp(rumps.App):
                 self.user_email = self.get_user_email()
                 self.save_credentials()
                 self.create_clockin_calendar()
-                rumps.notification("Signed in", "Successfully signed in to Google", "")
                 self.update_button_states()
                 print("Signed in with Google.")
             except Exception as e:
@@ -534,13 +547,7 @@ class MenuApp(rumps.App):
                     self.keyboard_shortcut_triggered
                 )
                 print(f"Keyboard shortcut {' + '.join(SHORTCUT_MODIFIERS)} + {SHORTCUT_KEY} registered")
-                
-                # Notify user of successful registration
-                rumps.notification(
-                    "Keyboard Shortcut Registered",
-                    f"Press {' + '.join(['⌘', '⇧', '⌃'])} + {SHORTCUT_KEY} to open task input",
-                    ""
-                )
+            
             except Exception as e:
                 print(f"Error registering keyboard shortcut: {e}")
                 rumps.notification(
@@ -554,45 +561,52 @@ class MenuApp(rumps.App):
             print("Keyboard shortcut disabled")
 
     def keyboard_shortcut_triggered(self):
-        """Handle the global keyboard shortcut being triggered"""
+        """Handle the global keyboard shortcut being triggered with improved error handling"""
         try:
             print("Keyboard shortcut triggered")
+            
+            # Make sure we're active
+            AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+            
+            # Show the task input window
             self.show_task_input()
         except Exception as e:
             print(f"Error handling keyboard shortcut: {e}")
             rumps.notification(
                 "Error",
-                "An error occurred when showing the task input window.",
+                "An error occurred when handling the keyboard shortcut.",
                 str(e)
             )
 
     def show_task_input(self, _=None):
-        """Show the task input window"""
+        """Show the task input window with improved error handling"""
         try:
             print("Showing task input window...")
             
-            # Check if window already exists
+            # Check if window already exists and close it first
             if hasattr(self, 'text_input_window') and self.text_input_window:
                 print("Window already exists, closing it first.")
                 self.text_input_window.close_window()
                 self.text_input_window = None
             
-            # Create and show the new window
+            # Create a new instance of the window with callback and storage
             self.text_input_window = TextInputWindow.alloc().initWithCallback_storage_(
                 self.handle_task_input,
                 self.storage
             )
             
-            if self.text_input_window:
-                success = self.text_input_window.createWindow()
-                if success:
-                    print("Task input window shown.")
-                else:
-                    print("Failed to create task input window.")
-                    self.text_input_window = None
-            else:
+            # Check if initialization succeeded
+            if not self.text_input_window:
                 print("Failed to initialize task input window.")
-                
+                rumps.notification(
+                    "Error",
+                    "Could not create the task input window.",
+                    "Please try again."
+                )
+                return
+            
+            print("Task input window created successfully.")
+            
         except Exception as e:
             print(f"Error showing task input: {e}")
             rumps.notification(
@@ -600,55 +614,76 @@ class MenuApp(rumps.App):
                 "An error occurred when showing the task input window.",
                 str(e)
             )
-            self.text_input_window = None
             
+            # Clean up any partial initialization
+            if hasattr(self, 'text_input_window') and self.text_input_window:
+                try:
+                    self.text_input_window.close_window()
+                except Exception:
+                    pass
+                self.text_input_window = None
+    
     def handle_task_input(self, task):
-        """Handle the result from the task input window"""
-        print(f"Handling task input: {task}")
-        
-        if task:
-            # Set the task as current and update UI
+        """Handle the result from the task input window with better error handling"""
+        try:
+            print(f"Handling task input: {task}")
+            
+            if task:
+                # Set the task as current and update UI
+                self.update_button_states()
+                
+                # Show notification
+                task_name = task.name
+                if task.category:
+                    task_name = f"@{task.category.name}/{task.name}"
+                
+            else:
+                # User cancelled, just update UI
+                self.update_button_states()
+            
+            # Clear the window reference
+            self.text_input_window = None
+        except Exception as e:
+            print(f"Error handling task input: {e}")
+            rumps.notification(
+                "Error",
+                "An error occurred processing the task.",
+                str(e)
+            )
+    
+    def start_existing_task(self, task):
+        """Start an existing task with improved error handling"""
+        try:
+            print(f"Starting existing task: {task.name}")
+            
+            # First stop any active task
+            active_task = self.storage.get_active_task()
+            if active_task:
+                active_task.pause()
+                
+                # Add to Google Calendar
+                if active_task.current_entry() and active_task.current_entry().end_time:
+                    self.add_task_to_google_calendar(active_task)
+            
+            # Start the selected task
+            task.start()
+            self.storage.save()
+            
+            # Update UI
             self.update_button_states()
             
             # Show notification
             task_name = task.name
             if task.category:
                 task_name = f"@{task.category.name}/{task.name}"
-            
-            rumps.notification("Task Started", "Now working on", task_name)
-        else:
-            # User cancelled, just update UI
-            self.update_button_states()
-        
-        # Clear the window reference
-        self.text_input_window = None
-
-    def start_existing_task(self, task):
-        """Start an existing task"""
-        print(f"Starting existing task: {task.name}")
-        
-        # First stop any active task
-        active_task = self.storage.get_active_task()
-        if active_task:
-            active_task.pause()
-            
-            # Add to Google Calendar
-            if active_task.current_entry() and active_task.current_entry().end_time:
-                self.add_task_to_google_calendar(active_task)
-        
-        # Start the selected task
-        task.start()
-        self.storage.save()
-        
-        # Update UI
-        self.update_button_states()
-        
-        # Show notification
-        task_name = task.name
-        if task.category:
-            task_name = f"@{task.category.name}/{task.name}"
-            
-        rumps.notification("Task Started", "Now working on", task_name)
+                
+        except Exception as e:
+            print(f"Error starting existing task: {e}")
+            rumps.notification(
+                "Error",
+                f"Could not start task: {task.name}",
+                str(e)
+            )
 
     def start_event(self, _):
         """Start a new task (legacy method)"""
@@ -658,80 +693,94 @@ class MenuApp(rumps.App):
         self.show_task_input()
 
     def pause_event(self, _):
-        """Pause the current task"""
-        print("Pausing event...")
-        
-        if not self.credentials:
-            print("Not signed in, showing alert.")
-            rumps.alert("Sign in first")
-            return
-        
-        # Get the active task
-        active_task = self.storage.get_active_task()
-        if not active_task:
-            print("No active task to pause.")
-            rumps.alert("No active task to pause")
-            return
-        
-        # Pause the task
-        active_task.pause()
-        
-        # Add to Google Calendar
-        self.add_task_to_google_calendar(active_task)
-        
-        # Save data
-        self.storage.save()
-        
-        # Show notification
-        task_name = active_task.name
-        if active_task.category:
-            task_name = f"@{active_task.category.name}/{active_task.name}"
+        """Pause the current task with improved error handling"""
+        try:
+            print("Pausing event...")
             
-        rumps.notification("Task Paused", "Paused working on", task_name)
-        
-        # Update UI
-        self.update_button_states()
-        print("Task paused.")
+            if not self.credentials:
+                print("Not signed in, showing alert.")
+                rumps.alert("Sign in first")
+                return
+            
+            # Get the active task
+            active_task = self.storage.get_active_task()
+            if not active_task:
+                print("No active task to pause.")
+                rumps.alert("No active task to pause")
+                return
+            
+            # Pause the task
+            active_task.pause()
+            
+            # Add to Google Calendar
+            self.add_task_to_google_calendar(active_task)
+            
+            # Save data
+            self.storage.save()
+            
+            # Show notification
+            task_name = active_task.name
+            if active_task.category:
+                task_name = f"@{active_task.category.name}/{task_name}"
+                
+            
+            # Update UI
+            self.update_button_states()
+            print("Task paused.")
+        except Exception as e:
+            print(f"Error pausing task: {e}")
+            rumps.notification(
+                "Error",
+                "Could not pause the current task.",
+                str(e)
+            )
 
     def stop_event(self, _):
-        """Stop the current task"""
-        print("Stopping event...")
-        
-        if not self.credentials:
-            print("Not signed in, showing alert.")
-            rumps.alert("Sign in first")
-            return
-        
-        # Get the active task
-        active_task = self.storage.get_active_task()
-        if not active_task:
-            print("No active task to stop.")
-            rumps.alert("No active task to stop")
-            return
-        
-        # Pause the task (which will end the current time entry)
-        active_task.pause()
-        
-        # Add to Google Calendar
-        self.add_task_to_google_calendar(active_task)
-        
-        # Save data
-        self.storage.save()
-        
-        # Show notification
-        task_name = active_task.name
-        if active_task.category:
-            task_name = f"@{active_task.category.name}/{active_task.name}"
+        """Stop the current task with improved error handling"""
+        try:
+            print("Stopping event...")
             
-        rumps.notification("Task Stopped", "Stopped working on", task_name)
-        
-        # Clear Discord presence
-        if self.rpc and self.discord_enabled:
-            self.rpc.clear()
-        
-        # Update UI
-        self.update_button_states()
-        print("Task stopped.")
+            if not self.credentials:
+                print("Not signed in, showing alert.")
+                rumps.alert("Sign in first")
+                return
+            
+            # Get the active task
+            active_task = self.storage.get_active_task()
+            if not active_task:
+                print("No active task to stop.")
+                rumps.alert("No active task to stop")
+                return
+            
+            # Pause the task (which will end the current time entry)
+            active_task.pause()
+            
+            # Add to Google Calendar
+            self.add_task_to_google_calendar(active_task)
+            
+            # Save data
+            self.storage.save()
+            
+            # Show notification
+            task_name = active_task.name
+            if active_task.category:
+                task_name = f"@{active_task.category.name}/{task_name}"
+                
+            
+            # Clear Discord presence
+            if self.rpc and self.discord_enabled:
+                self.rpc.clear()
+            
+            # Update UI
+            self.update_button_states()
+            print("Task stopped.")
+        except Exception as e:
+            print(f"Error stopping task: {e}")
+            rumps.notification(
+                "Error",
+                "Could not stop the current task.",
+                str(e)
+            )
 
     def get_color_id_for_hex(self, hex_color):
         """Convert hex color to Google Calendar color ID (approximate mapping)"""
@@ -848,6 +897,39 @@ class MenuApp(rumps.App):
             self.rpc = None
 
         print(f"Discord presence toggled to {'enabled' if self.discord_enabled else 'disabled'}.")
+
+    def open_json_file(self, _):
+        """Open the storage JSON file in the default text editor"""
+        print("Opening storage JSON file...")
+        try:
+            # Use the 'open' command on macOS to open the file with default application
+            # try to open with 'code' first and if it fails, fall back to 'open'
+            if not os.path.exists(self.storage.storage_file):
+                print(f"Storage file does not exist: {self.storage.storage_file}")
+                rumps.notification(
+                    "Error",
+                    "Storage file not found",
+                    f"{self.storage.storage_file} does not exist."
+                )
+                return
+            # Attempt to open with Visual Studio Code first
+            try:
+                subprocess.run(['code', self.storage.storage_file], check=True)
+            except FileNotFoundError:
+                # If 'code' is not found, fall back to 'open'
+                print("'code' command not found, falling back to 'open'")
+                subprocess.run(['open', self.storage.storage_file])
+            except subprocess.CalledProcessError:
+                # If 'code' fails, fall back to 'open' 
+                subprocess.run(['open', self.storage.storage_file])
+            print(f"Opened {self.storage.storage_file}")
+        except Exception as e:
+            print(f"Error opening JSON file: {e}")
+            rumps.notification(
+                "Error",
+                f"Could not open {self.storage.storage_file}",
+                str(e)
+            )
 
     def create_shell_script(self):
         """Create the shell script for startup"""

@@ -16,9 +16,20 @@ class KeyboardShortcut:
         self.running = False
         
     def start(self):
-        """Start listening for the keyboard shortcut"""
+        """Start listening for the keyboard shortcut with improved error handling"""
         try:
             if self.running:
+                return
+            
+            # Ensure permissions are available - add this helper method
+            accessibility_enabled = self._check_accessibility_permissions()
+            if not accessibility_enabled:
+                print("Accessibility permissions not granted.")
+                rumps.notification(
+                    "Keyboard Shortcut Failed",
+                    "Please enable accessibility permissions for this app",
+                    "Go to System Preferences > Security & Privacy > Privacy > Accessibility"
+                )
                 return
             
             # Create a callback function that will call our instance method properly
@@ -28,20 +39,18 @@ class KeyboardShortcut:
             # Store the callback to prevent garbage collection
             self._callback_func = callback_func
             
-            # Create an event tap for key down events
+            # IMPORTANT: Create event tap at session level instead of app level
             self.event_tap = Quartz.CGEventTapCreate(
-                Quartz.kCGSessionEventTap,  # Tap at session level
-                Quartz.kCGHeadInsertEventTap,  # Insert at the beginning of the event tap chain
+                Quartz.kCGSessionEventTap,  # Tap at session level (higher privilege)
+                Quartz.kCGHeadInsertEventTap,  # Insert at beginning of event tap chain
                 Quartz.kCGEventTapOptionDefault,
                 (1 << Quartz.kCGEventKeyDown),  # Only listen for key down events
-                self._callback_func,  # Now referencing the stored function
+                self._callback_func,  # Callback function
                 None  # User data (not used here)
             )
             
             if self.event_tap is None:
                 print("Failed to create event tap. Make sure your app has accessibility permissions.")
-                
-                # Show a notification to guide the user
                 rumps.notification(
                     "Keyboard Shortcut Failed",
                     "Please enable accessibility permissions for this app",
@@ -54,7 +63,7 @@ class KeyboardShortcut:
                 None, self.event_tap, 0
             )
             
-            # Add the source to the current run loop
+            # Add the source to the current run loop (Critical!)
             Quartz.CFRunLoopAddSource(
                 Quartz.CFRunLoopGetCurrent(), 
                 self.run_loop_source, 
@@ -68,6 +77,17 @@ class KeyboardShortcut:
             print(f"Keyboard shortcut {self.key_string()} registered")
         except Exception as e:
             print(f"Error starting keyboard shortcut: {e}")
+
+    def _check_accessibility_permissions(self):
+        """Check if the app has accessibility permissions"""
+        try:
+            # Use AXIsProcessTrustedWithOptions to check if we have accessibility access
+            trusted_check = {
+                AppKit.NSString.stringWithString_("AXTrustedCheckOptionPrompt"): False
+            }
+            return AppKit.AXIsProcessTrustedWithOptions(trusted_check)
+        except Exception:
+            return False
 
     def _event_callback_impl(self, proxy, event_type, event, refcon):
         """Callback for CGEventTap, handles keyboard events"""
@@ -145,17 +165,17 @@ class KeyboardShortcut:
             print(f"Error stopping keyboard shortcut: {e}")
     
     def _is_shortcut_match(self, keycode, event_flags):
-        """Check if the event matches our shortcut"""
+        """Check if the event matches our shortcut with improved matching logic"""
         try:
             # Convert key string to keycode for comparison
             shortcut_keycode = self._key_to_keycode(self.key)
             if keycode != shortcut_keycode:
                 return False
             
-            # Check modifiers
+            # Get required flags for our modifier combination
             required_flags = self._modifiers_to_flags(self.modifiers)
             
-            # Mask out irrelevant flags
+            # Mask out irrelevant flags - focus only on modifiers we care about
             relevant_flags = (
                 Quartz.kCGEventFlagMaskCommand | 
                 Quartz.kCGEventFlagMaskShift | 
@@ -163,7 +183,10 @@ class KeyboardShortcut:
                 Quartz.kCGEventFlagMaskControl
             )
             
+            # Get only the modifier flags we care about
             masked_event_flags = event_flags & relevant_flags
+            
+            # Check if all required modifiers are present
             return masked_event_flags == required_flags
         except Exception as e:
             print(f"Error in _is_shortcut_match: {e}")

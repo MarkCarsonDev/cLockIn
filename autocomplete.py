@@ -2,6 +2,8 @@ import AppKit
 import objc
 from typing import List, Optional, Callable, Tuple
 import Cocoa
+from models import Category, Task, DataStorage
+from textinput import CategoryTaskView
 
 class AutocompleteTextView(AppKit.NSTextView):
     """A custom text view subclass to handle keyboard input more directly"""
@@ -17,6 +19,9 @@ class AutocompleteTextView(AppKit.NSTextView):
         self.selected_category = None
         self.autocomplete_options = []
         self.current_autocomplete_index = -1
+        self.active = True
+        
+
         
         # Configure the text view
         self.setEditable_(True)
@@ -37,6 +42,10 @@ class AutocompleteTextView(AppKit.NSTextView):
         self.setPlaceholderString_("What are you working on?")
         
         return self
+
+    def textDidChange_(self, notification):
+        """Re-style as you type, not only after category pick."""
+        self.apply_input_styling()
     
     def keyDown_(self, event):
         """Override keyDown to handle special keys"""
@@ -93,9 +102,12 @@ class AutocompleteTextView(AppKit.NSTextView):
             # For now, let it advance through fields
             super(AutocompleteTextView, self).keyDown_(event)
             return
-            
+        super(AutocompleteTextInput, self).keyDown_(event)  
+        self.apply_input_styling()
+        return True  
         # For all other keys, let the superclass handle it
         super(AutocompleteTextView, self).keyDown_(event)
+
 
     def setPlaceholderString_(self, placeholder):
         """Set a placeholder string"""
@@ -140,40 +152,65 @@ class TextInputContainer(AppKit.NSView):
         
         return self
         
-    def setupTextViewWithCallback_storage_(self, callback, storage):
-        """Set up the text view with the given callback and storage"""
-        self.callback = callback
-        self.storage = storage
+    def setupTextView(self):
+        """Set up the text view with improved styling"""
+        # Create the text container with padding
+        text_container = AppKit.NSTextContainer.alloc().initWithContainerSize_(
+            AppKit.NSMakeSize(self.scroll_view.frame().size.width, 1000)  # Height doesn't matter, it will expand
+        )
+        text_container.setWidthTracksTextView_(True)
+        text_container.setHeightTracksTextView_(False)  # Let it expand vertically
         
-        # Create a scroll view to hold the text view
-        scroll_frame = AppKit.NSInsetRect(self.bounds(), 5, 5)
-        scroll_view = AppKit.NSScrollView.alloc().initWithFrame_(scroll_frame)
-        scroll_view.setBorderType_(AppKit.NSNoBorder)
-        scroll_view.setHasVerticalScroller_(True)
-        scroll_view.setHasHorizontalScroller_(False)
-        scroll_view.setAutohidesScrollers_(True)
-        scroll_view.setDrawsBackground_(False)
+        # Create layout manager
+        layout_manager = AppKit.NSLayoutManager.alloc().init()
+        layout_manager.addTextContainer_(text_container)
         
-        # Calculate the text view frame
-        text_frame = AppKit.NSMakeRect(
-            0, 0, 
-            AppKit.NSWidth(scroll_frame), 
-            AppKit.NSHeight(scroll_frame)
+        # Create text storage
+        text_storage = AppKit.NSTextStorage.alloc().init()
+        text_storage.addLayoutManager_(layout_manager)
+        
+        # Create the text view with the text container
+        self.text_view = CategoryTaskView.alloc().initWithFrame_textContainer_callback_storage_(
+            AppKit.NSMakeRect(0, 0, self.scroll_view.frame().size.width, self.scroll_view.frame().size.height),
+            text_container,
+            self.callback,
+            self.storage
         )
         
-        # Create and configure the text view
-        self.text_view = AutocompleteTextView.alloc().initWithFrame_callback_storage_(
-            text_frame, callback, storage
-        )
+        # Configure text view appearance
+        self.text_view.setEditable_(True)
+        self.text_view.setSelectable_(True)
+        self.text_view.setRichText_(True)
+        self.text_view.setAllowsUndo_(True)
         
-        # Set up the scroll view
-        scroll_view.setDocumentView_(self.text_view)
-        self.addSubview_(scroll_view)
+        # Set background to clear for proper visual effect display
+        self.text_view.setDrawsBackground_(False)
+        self.text_view.setBackgroundColor_(AppKit.NSColor.clearColor())
         
-        # Save references
-        self.scroll_view = scroll_view
+        # Improve text appearance
+        self.text_view.setFont_(AppKit.NSFont.systemFontOfSize_(16.0))
+        self.text_view.setTextColor_(AppKit.NSColor.textColor())
         
-        return self.text_view
+        # Set insertion point color and make it visible
+        self.text_view.setInsertionPointColor_(AppKit.NSColor.textColor())
+        self.text_view.setContinuousSpellCheckingEnabled_(False)  # Disable spell checking
+        
+        # Critical: Configure vertical text alignment
+        # Add vertical text insets to center content
+        frame_height = self.scroll_view.frame().size.height
+        text_height = 20  # Approximate height of text line
+        vertical_inset = (frame_height - text_height) / 2
+        
+        # Set text container insets for vertical centering
+        self.text_view.setTextContainerInset_(AppKit.NSMakeSize(5, vertical_inset))
+        
+        # Set placeholder text with vertical alignment
+        self.text_view.setPlaceholderText_("What are you working on?")
+        
+        # Set up scroll view with the text view
+        self.scroll_view.setDocumentView_(self.text_view)
+        self.scroll_view.setHasVerticalScroller_(False)  # No scrollers needed for single line
+        self.scroll_view.setHasHorizontalScroller_(False)
 
 class AutocompleteTextInput(AppKit.NSTextField):
     # Declare Objective-C instance variables
@@ -211,6 +248,9 @@ class AutocompleteTextInput(AppKit.NSTextField):
         self.selected_category = None
         self.autocomplete_options = []
         self.current_autocomplete_index = -1
+        self.active = True
+        
+
         
         # Setup field appearance - modern macOS Spotlight style
         self.setPlaceholderString_("What are you working on?")
@@ -307,7 +347,13 @@ class AutocompleteTextInput(AppKit.NSTextField):
             category_part = f"[@{self.selected_category.name}]"
             
             # Get the task part (if any)
-            task_part = text[len(category_part):].strip() if text.startswith(category_part) else text
+            if text.startswith(category_part):
+                raw = text[len(category_part):]
+                task_part = raw.strip() if raw.strip() else ""
+            else:
+                task_part = ""
+
+
             if task_part and not task_part.startswith("("):
                 task_part = f"({task_part})"
             
@@ -643,6 +689,81 @@ class AutocompleteTextInput(AppKit.NSTextField):
             # Position cursor after the category part
             if self.currentEditor():
                 self.currentEditor().setSelectedRange_(AppKit.NSMakeRange(len(self.stringValue()), 0))
+
+class CategoryAutocompleteDelegate(AppKit.NSObject):
+    """
+    Delegate class to handle category/task autocomplete
+    This helper class is now kept minimal and mainly used for table view data
+    The main functionality has been moved to the text view and window classes
+    """
+    
+    # Declare instance variables using objc.ivar
+    options = objc.ivar('options')
+    callback = objc.ivar('callback')
+    
+    def initWithOptions_callback_(self, options, callback):
+        """Initialize with options and callback"""
+        self = objc.super(CategoryAutocompleteDelegate, self).init()
+        if self is None:
+            return None
+        
+        self.options = options or []
+        self.callback = callback
+        return self
+    
+    # NSTableViewDataSource methods
+    def numberOfRowsInTableView_(self, tableView):
+        """Return the number of rows in the table view"""
+        return len(self.options) if self.options else 0
+    
+    def tableView_objectValueForTableColumn_row_(self, tableView, column, row):
+        """Return the value for a specific cell"""
+        if 0 <= row < len(self.options):
+            option = self.options[row]
+            if hasattr(option, 'name'):
+                return option.name
+        return ""
+    
+    # NSTableViewDelegate methods
+    def tableViewSelectionDidChange_(self, notification):
+        """Handle selection change in the table view"""
+        tableView = notification.object()
+        selectedRow = tableView.selectedRow()
+        
+        if 0 <= selectedRow < len(self.options):
+            selected_option = self.options[selectedRow]
+            if self.callback:
+                self.callback(selected_option)
+    
+    def updateOptions_(self, new_options):
+        """Update the options list"""
+        self.options = new_options or []
+
+
+def nscolor_from_hex(hex_string):
+    """Convert hex color string to NSColor"""
+    if not hex_string or not isinstance(hex_string, str) or not hex_string.startswith('#'):
+        return AppKit.NSColor.systemBlueColor()
+    
+    # Remove # prefix
+    hex_string = hex_string[1:]
+    
+    # Parse hex values
+    try:
+        r_hex = hex_string[0:2]
+        g_hex = hex_string[2:4]
+        b_hex = hex_string[4:6]
+        
+        r = int(r_hex, 16) / 255.0
+        g = int(g_hex, 16) / 255.0
+        b = int(b_hex, 16) / 255.0
+        
+        return AppKit.NSColor.colorWithRed_green_blue_alpha_(r, g, b, 1.0)
+    except Exception:
+        return AppKit.NSColor.systemBlueColor()
+
+# Add method to NSColor class
+AppKit.NSColor.colorWithHexString_ = classmethod(nscolor_from_hex)
 
 
 class AutocompleteTableDelegate(AppKit.NSObject):

@@ -95,18 +95,22 @@ cLockIn is a macOS menu bar application designed to track time spent on various 
 
 #### 3.2.2 Task Input Interface
 
-* **Appearance** :
+* **Appearance**:
 * Spotlight-style floating window
 * Dark, semi-transparent with frosted glass effect
 * Rounded corners and modern macOS aesthetic
 * Position centered near the top of the screen
-* **Core Functionality** :
+* **Core Functionality**:
 * Single text field for input
 * Keyboard-driven workflow (no buttons)
 * Parse '@' symbol for category selection
-* Tab completion for categories and tasks
+* Tab completion for categories and tasks (context-sensitive)
 * Visual differentiation between category and task components
 * Animation for appearance/disappearance
+* **Text Navigation**:
+* Arrow keys for cursor movement within text
+* Visible text cursor
+* Intelligent backspace behavior for categories and tasks
 
 #### 3.2.3 Autocomplete Component
 
@@ -143,30 +147,29 @@ cLockIn is a macOS menu bar application designed to track time spent on various 
 
 #### 3.3.2 Task Entry
 
-* **Basic Flow** :
-
+* **Basic Flow**:
 1. Activate via global shortcut or menu bar
 2. Type directly for uncategorized task
 3. Use @ prefix for category selection
 4. Press Enter to confirm
 5. Escape to cancel
 
-* **Category Mode** :
-* Enter with @ as first character
+* **Category Mode**:
+* Enter with @ as first character or at cursor position 0
 * Tab to cycle through existing categories
 * Enter to confirm selection
-* Backspace to delete and exit category mode
-* **Task Mode** :
+* Backspace once to clear category text (leaving @)
+* Backspace again to exit category mode
+* **Task Mode**:
 * After category selection or directly
-* Tab to cycle through existing tasks
+* Tab to cycle through existing tasks for the current category
+* If no category selected, tab cycles through uncategorized tasks
 * Enter to confirm selection
 * Backspace to delete (whole task if selected via Tab)
-* **Example Input Sequences** :
-
-1. `@ABC Consulting <ENTER> Design homepage <ENTER>` - Create and start a new task (Design homepage) in a category (ABC Consulting)
-2. `@<TAB><TAB><ENTER> Meeting notes <ENTER>` - Select category via Tab and create new task
-3. `<TAB><TAB><ENTER>` - Select and restart an existing uncategorized task
-4. `@<TAB><ENTER><BACKSPACE>@<TAB><ENTER>New task <ENTER>` - Change category selection
+* **Category Insertion**:
+* When typing @ at beginning of existing text, switch to category mode
+* A space is automatically inserted to separate category from task text
+* When category is confirmed, cursor is positioned after category
 
 #### 3.3.3 Task Management
 

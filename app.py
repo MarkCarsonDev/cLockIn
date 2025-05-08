@@ -16,6 +16,8 @@ import AppKit
 from pypresence import Presence
 from dotenv import load_dotenv
 from pynput import keyboard
+import zoneinfo
+from datetime import datetime, timezone
 
 # Import custom components
 from models import Category, Task, DataStorage
@@ -117,12 +119,41 @@ class MenuApp(rumps.App):
         
         self.sign_out_item = rumps.MenuItem("Sign Out", callback=self.sign_out)
 
+        self.time_zone_menu = rumps.MenuItem("Time Zone for Export")
+        self.selected_time_zone_item = None
+        # Populate with common time zones
+        for tz_name in self.get_common_time_zones():
+            try:
+                # Make sure the time zone is valid
+                zoneinfo.ZoneInfo(tz_name)
+                tz_item = rumps.MenuItem(tz_name, callback=self.select_time_zone)
+                if self.storage.get_time_zone() == tz_name:
+                    tz_item.state = True
+                    self.selected_time_zone_item = tz_item
+                self.time_zone_menu.add(tz_item)
+            except Exception:
+                # Skip invalid time zones
+                pass
+        
+        # Add a system default option
+        system_default_item = rumps.MenuItem("System Default", callback=self.select_time_zone)
+        if self.storage.get_time_zone() is None:
+            system_default_item.state = True
+            self.selected_time_zone_item = system_default_item
+        self.time_zone_menu.add(system_default_item)
+    
+    # Add to preferences menu after keyboard shortcut item
         self.preferences_menu = rumps.MenuItem("Preferences")
         self.preferences_menu.add(self.run_at_startup_item)
         self.preferences_menu.add(self.show_in_discord_item)
         self.preferences_menu.add(self.keyboard_shortcut_item)
-        self.preferences_menu.add(self.sign_out_item)
+        self.preferences_menu.add(None)
+        self.preferences_menu.add(self.time_zone_menu)
         self.preferences_menu.add(self.view_json_item)
+        self.preferences_menu.add(None)
+        self.preferences_menu.add(self.sign_out_item)
+
+    
 
         # Base menu
         self.menu = [
@@ -143,6 +174,40 @@ class MenuApp(rumps.App):
         
         print("Enhanced application initialized.")
         self.set_accessory_mode()
+
+    def get_common_time_zones(self):
+        """Return a list of common time zones"""
+        # List of common time zones
+        common_zones = [
+            "UTC",
+            "America/New_York",     # Eastern Time
+            "America/Chicago",      # Central Time
+            "America/Denver",       # Mountain Time
+            "America/Los_Angeles",  # Pacific Time
+            "America/Anchorage",    # Alaska Time
+            "Pacific/Honolulu",     # Hawaii Time
+            "Europe/London",        # GMT/BST
+            "Europe/Paris",         # Central European Time
+            "Europe/Athens",        # Eastern European Time
+            "Asia/Tokyo",           # Japan Time
+            "Asia/Shanghai",        # China Time
+            "Australia/Sydney",     # Australian Eastern Time
+            "Pacific/Auckland",     # New Zealand Time
+        ]
+        # Get the system time zone if available
+        try:
+            import platform
+            if platform.system() == 'Darwin':  # macOS
+                import subprocess
+                result = subprocess.run(['systemsetup', '-gettimezone'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    system_tz = result.stdout.strip().replace('Time Zone: ', '')
+                    if system_tz and system_tz not in common_zones:
+                        common_zones.insert(0, system_tz)
+        except Exception as e:
+            print(f"Error getting system time zone: {e}")
+        
+        return common_zones
 
     def suspend_active_tasks_on_startup(self):
         """Suspend any active tasks from previous sessions to prevent auto-restart"""
@@ -275,7 +340,6 @@ class MenuApp(rumps.App):
                         recent_tasks_menu.add(task_item)
                     
                     self.menu.add(recent_tasks_menu)
-                    self.menu.add(None)  # Add separator after recent tasks
             
             # Add categories section
             categories = self.storage.get_categories()
@@ -339,6 +403,26 @@ class MenuApp(rumps.App):
         # Update the title
         self.update_title()
         print("Button states updated.")
+
+    def select_time_zone(self, sender):
+        """Handle time zone selection"""
+        # Uncheck the previously selected item
+        if self.selected_time_zone_item:
+            self.selected_time_zone_item.state = False
+        
+        # Check the newly selected item
+        sender.state = True
+        self.selected_time_zone_item = sender
+        
+        # Store the time zone preference
+        selected_tz = sender.title
+        if selected_tz == "System Default":
+            selected_tz = None
+        
+        # Save to storage
+        self.storage.set_time_zone(selected_tz)
+        print(f"Selected time zone: {selected_tz or 'System Default'}")
+    
 
     def update_title(self, _=None):
         """Update the menu bar title based on current task"""

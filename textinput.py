@@ -5,6 +5,7 @@ from typing import Callable, Optional, Dict, List
 import Cocoa
 import time
 import sys
+import re
 
 # Enable verbose debug logging
 DEBUG = True
@@ -401,6 +402,41 @@ class CategoryTaskView(AppKit.NSTextView):
                 debug_log("CMD + A detected - selecting all text")
                 self.selectAll_(None)
                 return True
+
+        # Handle pasting
+        if keycode == 9:  # Command + V
+            modifiers = AppKit.NSEvent.modifierFlags()
+            if modifiers & AppKit.NSCommandKeyMask:
+                debug_log("CMD + V detected - pasting text")
+                # Get the clipboard content
+                pasteboard = AppKit.NSPasteboard.generalPasteboard()
+                paste_text = pasteboard.stringForType_(AppKit.NSStringPboardType)
+                # remove newlines, tabs, carriage returns, non-simple unicode characters, etc.
+                parsed_text = re.sub(r'[^a-zA-Z0-9!@#$%^&*()_+\-=\[\]{};\'":,.<>?\\/| ]', '', paste_text)
+                parsed_text = re.sub(r'[\n\r\t\u2028\u2029]', ' ', parsed_text)
+                parsed_text = re.sub(r'\s+', ' ', parsed_text)  # Replace multiple spaces with a single space
+                parsed_text = parsed_text.strip()  # Remove leading/trailing spaces
+
+                
+                if parsed_text:
+                    # Insert the pasted text
+                    self.insertText_(parsed_text)
+                    return True      
+
+        # Handle copying
+        if keycode == 8:  # Command + C
+            modifiers = AppKit.NSEvent.modifierFlags()
+            if modifiers & AppKit.NSCommandKeyMask:
+                debug_log("CMD + C detected - copying text")
+                # Get the selected text
+                selected_range = self.selectedRange()
+                if selected_range.length > 0:
+                    selected_text = self.string()[selected_range.location:selected_range.location + selected_range.length]
+                    # Copy to clipboard
+                    pasteboard = AppKit.NSPasteboard.generalPasteboard()
+                    pasteboard.clearContents()
+                    pasteboard.setString_forType_(selected_text, AppKit.NSStringPboardType)
+                    return True     
             
         # Handle Backspace/Delete key with improved behavior
         if keycode == 51:  # Backspace key
@@ -523,16 +559,23 @@ class CategoryTaskView(AppKit.NSTextView):
                         self.storage.save()
                         debug_log(f"Created and started task: {task.name}")
                         
-                        # Call callback with the task
-                        if self.callback:
-                            debug_log("Calling callback with task")
-                            self.callback(task)
+                        # Store created task - we'll use this in window_controller.close_window()
+                        self.created_task = task
                         
-                        # Close the window 
-                        window = self.window()
-                        if window and hasattr(window, 'close'):
-                            debug_log("Closing window after task creation")
-                            window.close()
+                        # Use window_controller to properly close all windows
+                        if hasattr(self, 'window_controller') and self.window_controller:
+                            debug_log("Using window_controller to close all windows")
+                            self.window_controller.close_window_with_task(task)
+                        else:
+                            # Fallback to direct callback and window closing
+                            if self.callback:
+                                debug_log("Calling callback with task")
+                                self.callback(task)
+                            
+                            window = self.window()
+                            if window and hasattr(window, 'close'):
+                                debug_log("Closing window after task creation")
+                                window.close()
                     except Exception as e:
                         debug_log(f"Error creating/starting task: {e}")
                     
@@ -1891,7 +1934,85 @@ class TextInputWindow(AppKit.NSObject):
             debug_log("Window closed successfully")
         except Exception as e:
             debug_log(f"Error in close_window: {e}")
-    
+
+
+    def close_window_with_task(self, task):
+        """Safely close the window while submitting a task"""
+        debug_log(f"TextInputWindow: close_window_with_task called with task: {task.name}")
+        try:
+            # First check if window exists
+            if not self.window:
+                debug_log("Window already closed")
+                return
+            
+            # Store local references
+            window = self.window
+            blur_window = self.blur_window if hasattr(self, 'blur_window') else None
+            callback = self.callback
+            
+            # Stop event monitor FIRST before closing anything
+            if self.text_view:
+                debug_log("Stopping event monitor")
+                try:
+                    self.text_view.stopEventMonitor()
+                    self.text_view.active = False  # Critical: disable any event processing
+                except Exception as e:
+                    debug_log(f"Error stopping event monitor: {e}")
+            
+            # Stop rainbow animation if active
+            if hasattr(self, 'rainbow_border') and self.rainbow_border:
+                try:
+                    self.rainbow_border.stopAnimation()
+                except Exception as e:
+                    debug_log(f"Error stopping rainbow animation: {e}")
+            
+            # Clear all references to avoid retain cycles
+            self.window.setDelegate_(None)  # Remove delegate first
+            
+            # Call the callback with the task (not None)
+            if callback:
+                try:
+                    debug_log(f"Calling callback with task: {task.name}")
+                    # Save reference for later to avoid early cleanup
+                    temp_callback = callback
+                    self.callback = None  # Clear the reference
+                    temp_callback(task)  # Use the saved reference with the task
+                except Exception as e:
+                    debug_log(f"Error calling callback during window close: {e}")
+            
+            # Now close the windows
+            try:
+                debug_log("Hiding main window")
+                window.orderOut_(None)  # This immediately hides the window
+                
+                # Close the blur window if it exists
+                debug_log("Checking for blur window")
+                if blur_window:
+                    debug_log("Closing blur window")
+                    blur_window.orderOut_(None)
+                    blur_window.close()
+                    self.blur_window = None
+                
+                # Ensure the app returns to accessory mode
+                app = AppKit.NSApplication.sharedApplication()
+                app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+                
+                debug_log("Closing main window")
+                window.close()  # This actually closes the window
+                
+                # Important: Clear these references AFTER closing windows
+                self.window = None
+                self.text_view = None
+                self.autocomplete_view = None
+                self.scroll_view = None
+            except Exception as e:
+                debug_log(f"Error closing window: {e}")
+            
+            debug_log("Window closed successfully with task submitted")
+        except Exception as e:
+            debug_log(f"Error in close_window_with_task: {e}")
+        
+
     def dealloc(self):
         """Clean up resources"""
         debug_log("TextInputWindow: dealloc called")

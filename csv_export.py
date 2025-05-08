@@ -4,6 +4,7 @@ import datetime
 import subprocess
 from typing import Dict, List, Optional
 import rumps
+import zoneinfo
 
 from models import Category, Task, DataStorage
 
@@ -27,8 +28,33 @@ class CSVExporter:
                 # Fall back to current directory as last resort
                 self.export_dir = os.getcwd()
 
+    def get_preferred_timezone(self):
+        """Get the preferred timezone or system default"""
+        tz_name = self.storage.get_time_zone()
+        if tz_name:
+            try:
+                return zoneinfo.ZoneInfo(tz_name)
+            except Exception as e:
+                print(f"Error getting time zone {tz_name}: {e}")
+        
+        # Fall back to system default
+        return datetime.datetime.now().astimezone().tzinfo
+    
+    def convert_datetime_to_preferred_timezone(self, dt):
+        """Convert a datetime to the preferred timezone"""
+        if dt is None:
+            return None
+        
+        # Make sure it has a timezone (use UTC if naive)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        
+        # Convert to preferred timezone
+        preferred_tz = self.get_preferred_timezone()
+        return dt.astimezone(preferred_tz)
+
     def export_category_timesheet(self, category: Category) -> Optional[str]:
-        """Export a timesheet CSV for the given category with improved error handling"""
+        """Export a simple CSV for the given category with improved error handling"""
         if not category:
             return None
         
@@ -39,8 +65,10 @@ class CSVExporter:
             rumps.notification("Export Failed", f"No tasks found for category: {category.name}", "")
             return None
         
-        # Create filename with timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Create filename with timestamp using preferred timezone
+        preferred_tz = self.get_preferred_timezone()
+        timestamp = datetime.datetime.now().astimezone(preferred_tz).strftime("%Y%m%d_%H%M%S")
+        
         # Sanitize filename by removing invalid characters
         category_name = ''.join(c for c in category.name if c.isalnum() or c in ' _-')
         filename = f"{category_name.replace(' ', '_')}_timesheet_{timestamp}.csv"
@@ -50,7 +78,10 @@ class CSVExporter:
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile, delimiter=';')
                 # Write header row
-                writer.writerow(['task_name', 'total_time_spent'])
+                writer.writerow(['task_name', 'total_time_spent', 'timezone'])
+                
+                # Get timezone name for display
+                tz_name = getattr(preferred_tz, 'key', str(preferred_tz))
                 
                 # Write task data rows
                 for task in tasks:
@@ -58,9 +89,9 @@ class CSVExporter:
                     hours = int(total_seconds // 3600)
                     minutes = int((total_seconds % 3600) // 60)
                     time_str = f"{hours}h {minutes}m"
-                    writer.writerow([task.name, time_str])
+                    writer.writerow([task.name, time_str, tz_name])
             
-            print(f"CSV exported successfully to {filepath}")
+            print(f"CSV exported successfully to {filepath} using {tz_name} timezone")
             return filepath
         except PermissionError:
             print(f"Permission denied when writing to {filepath}")
@@ -70,6 +101,7 @@ class CSVExporter:
             print(f"Error exporting CSV: {e}")
             rumps.notification("Export Failed", f"Error: {str(e)}", "")
             return None
+
     def export_detailed_timesheet(self, category: Category) -> Optional[str]:
         """Export a detailed timesheet CSV with individual time entries"""
         if not category:
@@ -90,21 +122,32 @@ class CSVExporter:
             with open(filepath, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile, delimiter=';')
                 # Write header row
-                writer.writerow(['task_name', 'start_time', 'end_time', 'duration'])
+                writer.writerow(['Task','Day', 'Start', 'End', 'Duration'])
+                
+                # Get the preferred timezone for display
+                preferred_tz = self.get_preferred_timezone()
+                tz_name = getattr(preferred_tz, 'key', str(preferred_tz))
                 
                 # Write detailed time entry data
                 for task in tasks:
                     for entry in task.time_entries:
                         if entry.end_time:  # Only include completed entries
-                            start_time = entry.start_time.strftime("%Y-%m-%d %H:%M:%S")
-                            end_time = entry.end_time.strftime("%Y-%m-%d %H:%M:%S")
-                            duration_seconds = entry.duration()
+                            # Convert times to preferred timezone
+                            start_time_local = self.convert_datetime_to_preferred_timezone(entry.start_time)
+                            end_time_local = self.convert_datetime_to_preferred_timezone(entry.end_time)
                             
+                            # Format the times in the preferred timezone
+                            calendar_day = start_time_local.strftime("%V %a %d/%m/%Y")
+                            start_time_str = start_time_local.strftime("%Y-%m-%d %H:%M:%S")
+                            end_time_str = end_time_local.strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            # Duration remains the same (calculated from UTC times)
+                            duration_seconds = entry.duration()
                             hours = int(duration_seconds // 3600)
                             minutes = int((duration_seconds % 3600) // 60)
                             time_str = f"{hours}h {minutes}m"
                             
-                            writer.writerow([task.name, start_time, end_time, time_str])
+                            writer.writerow([task.name, calendar_day, start_time_str, end_time_str, time_str])
             
             print(f"Detailed CSV exported successfully to {filepath}")
             return filepath
@@ -113,7 +156,7 @@ class CSVExporter:
             return None
     
     def export_weekly_timesheet(self, category: Category) -> Optional[str]:
-        """Export a weekly timesheet CSV with days as columns"""
+        """Export a weekly timesheet CSV with days as columns, using preferred timezone"""
         if not category:
             return None
         
@@ -123,8 +166,10 @@ class CSVExporter:
             print(f"No tasks found for category: {category.name}")
             return None
         
-        # Get start of the current week (Monday)
-        today = datetime.datetime.now().date()
+        # Get start of the current week (Monday) in the preferred timezone
+        preferred_tz = self.get_preferred_timezone()
+        now_local = datetime.datetime.now().astimezone(preferred_tz)
+        today = now_local.date()
         start_of_week = today - datetime.timedelta(days=today.weekday())
         
         # Create a list of dates for the week
@@ -132,7 +177,7 @@ class CSVExporter:
         date_strs = [date.strftime("%Y-%m-%d") for date in dates]
         
         # Create filename with timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = now_local.strftime("%Y%m%d_%H%M%S")
         filename = f"{category.name.replace(' ', '_')}_weekly_{timestamp}.csv"
         filepath = os.path.join(self.export_dir, filename)
         
@@ -153,8 +198,11 @@ class CSVExporter:
                     
                     for entry in task.time_entries:
                         if entry.end_time:  # Only include completed entries
-                            # Get the date of this entry
-                            entry_date = entry.start_time.date()
+                            # Convert start time to preferred timezone
+                            local_start_time = self.convert_datetime_to_preferred_timezone(entry.start_time)
+                            
+                            # Get the date of this entry in local time
+                            entry_date = local_start_time.date()
                             entry_date_str = entry_date.strftime("%Y-%m-%d")
                             
                             # If this date is in our week, add the duration
@@ -186,7 +234,7 @@ class CSVExporter:
                     
                     writer.writerow(row)
             
-            print(f"Weekly CSV exported successfully to {filepath}")
+            print(f"Weekly CSV exported successfully to {filepath} using {getattr(preferred_tz, 'key', str(preferred_tz))} timezone")
             return filepath
         except Exception as e:
             print(f"Error exporting weekly CSV: {e}")

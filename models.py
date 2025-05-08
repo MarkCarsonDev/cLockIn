@@ -154,44 +154,22 @@ class DataStorage:
         self.storage_file = os.path.expanduser(f"~/.clockin/{storage_file}")
         self.categories: Dict[str, Category] = {}
         self.tasks: List[Task] = []
+        self.time_zone = None  # Default time zone is None (will fall back to system default)
         self.load()
+    
+    # Add these new methods
+    def set_time_zone(self, time_zone_name: str) -> None:
+        """Set the preferred time zone"""
+        self.time_zone = time_zone_name
+        self.save()
+    
+    def get_time_zone(self) -> str:
+        """Get the preferred time zone"""
+        return self.time_zone
     
     def ensure_storage_dir(self) -> None:
         """Ensure the storage directory exists"""
         os.makedirs(os.path.dirname(self.storage_file), exist_ok=True)
-        
-    def load(self) -> None:
-        """Load data from storage file with enhanced error handling"""
-        self.ensure_storage_dir()
-        if not os.path.exists(self.storage_file):
-            return
-        
-        try:
-            with open(self.storage_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # Recreate categories
-            self.categories = {}
-            for cat_data in data.get('categories', []):
-                if isinstance(cat_data, dict):
-                    category = Category.from_dict(cat_data)
-                    self.categories[category.name] = category
-                else:
-                    # Handle old format where categories were just strings
-                    category = Category(cat_data)
-                    self.categories[category.name] = category
-            
-            # Recreate tasks
-            self.tasks = []
-            for task_data in data.get('tasks', []):
-                task = Task.from_dict(task_data, self.categories)
-                self.tasks.append(task)
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON data: {e}")
-            self._handle_corrupted_data()
-        except Exception as e:
-            print(f"Error loading data: {e}")
-            self._handle_corrupted_data()
         
     def _handle_corrupted_data(self):
         """Handle corrupted data by backing up and initializing empty data"""
@@ -221,7 +199,8 @@ class DataStorage:
         
         data = {
             'categories': [cat.to_dict() for cat in self.categories.values()],
-            'tasks': [task.to_dict() for task in self.tasks]
+            'tasks': [task.to_dict() for task in self.tasks],
+            'time_zone': self.time_zone  # Add time zone to saved data
         }
         
         # Write to a temporary file first, then rename for atomic operation
@@ -243,6 +222,42 @@ class DataStorage:
                     os.remove(temp_file)
                 except:
                     pass
+    
+    def load(self) -> None:
+        """Load data from storage file with enhanced error handling"""
+        self.ensure_storage_dir()
+        if not os.path.exists(self.storage_file):
+            return
+        
+        try:
+            with open(self.storage_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Recreate categories
+            self.categories = {}
+            for cat_data in data.get('categories', []):
+                if isinstance(cat_data, dict):
+                    category = Category.from_dict(cat_data)
+                    self.categories[category.name] = category
+                else:
+                    # Handle old format where categories were just strings
+                    category = Category(cat_data)
+                    self.categories[category.name] = category
+            
+            # Recreate tasks
+            self.tasks = []
+            for task_data in data.get('tasks', []):
+                task = Task.from_dict(task_data, self.categories)
+                self.tasks.append(task)
+                
+            # Load time zone
+            self.time_zone = data.get('time_zone')
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON data: {e}")
+            self._handle_corrupted_data()
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            self._handle_corrupted_data()
     
     def add_category(self, name: str) -> Category:
         """Add a new category or return existing one with sanitized name"""

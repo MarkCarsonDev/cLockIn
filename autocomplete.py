@@ -31,6 +31,8 @@ class AutocompleteTextView(AppKit.NSTextView):
         self.setTextColor_(AppKit.NSColor.whiteColor())
         self.setDrawsBackground_(True)
         self.setBackgroundColor_(AppKit.NSColor.blackColor().colorWithAlphaComponent_(0.2))
+
+        self.setInsertionPointColor_(AppKit.NSColor.textColor())
         
         # Use rounded border
         self.setWantsLayer_(True)

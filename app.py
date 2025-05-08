@@ -15,6 +15,7 @@ from Quartz import CGShieldingWindowLevel
 import AppKit
 from pypresence import Presence
 from dotenv import load_dotenv
+from pynput import keyboard
 
 # Import custom components
 from models import Category, Task, DataStorage

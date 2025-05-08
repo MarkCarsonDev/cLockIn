@@ -7,4 +7,5 @@ python-dateutil
 pyobjc
 pypresence
 python-dotenv
+pynput
 

@@ -30,6 +30,7 @@ class EventMonitor:
             return
         
         try:
+            debug_log("EventMonitor: starting")
             # Create callback function for the event tap
             def callback_func(proxy, event_type, event, refcon):
                 return self._event_callback(proxy, event_type, event, refcon)
@@ -75,60 +76,112 @@ class EventMonitor:
             return False
     
     def stop(self):
-        """Stop monitoring key events"""
+        """Stop monitoring key events with improved cleanup"""
+        debug_log("EventMonitor: stop called")
         if not self.running:
             return
+        
+        self.running = False  # Set this FIRST to prevent any new callbacks
         
         try:
             if self.event_tap:
                 # Disable the event tap
+                debug_log("Disabling event tap")
                 Quartz.CGEventTapEnable(self.event_tap, False)
                 
-                # Remove source from run loop
+                # Remove source from run loop and release it
                 if self.run_loop_source:
+                    debug_log("Removing run loop source")
                     Quartz.CFRunLoopRemoveSource(
                         Quartz.CFRunLoopGetCurrent(),
                         self.run_loop_source,
                         Quartz.kCFRunLoopCommonModes
                     )
-                    del self.run_loop_source
+                    
+                    # Set to None to release reference
                     self.run_loop_source = None
                 
-                # Release the event tap
-                del self.event_tap
+                # Set to None to release reference
                 self.event_tap = None
             
-            self.running = False
-            debug_log("Event monitor stopped")
-        
+            # Clear reference to target
+            self.target = None
+            
+            debug_log("EventMonitor: stop completed")
         except Exception as e:
             debug_log(f"Error stopping event monitor: {e}")
     
     def _event_callback(self, proxy, event_type, event, refcon):
-        """Callback for CGEventTap to handle key events"""
-        try:
-            if event_type != Quartz.kCGEventKeyDown:
-                return event
+        """Callback for CGEventTap to handle key events with enhanced safety checks"""
+        # Early exit checks for several conditions
+        if not self.running:
+            debug_log("EventMonitor not running, passing event through")
+            return event
             
+        if not self.target:
+            debug_log("EventMonitor has no target, passing event through")
+            return event
+            
+        if not hasattr(self.target, 'active'):
+            debug_log("Target doesn't have 'active' attribute, passing event through")
+            return event
+            
+        if not self.target.active:
+            debug_log("Target is not active, passing event through")
+            return event
+            
+        if event_type != Quartz.kCGEventKeyDown:
+            return event
+        
+        try:
             # Get keycode and modifiers from the event
             keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
-            chars = Cocoa.NSEvent.eventWithCGEvent_(event).characters()
-            
-            # Track an internal state
-            # We'll set this when the window appears and clear it when closed/cancelled
-            if (not self.target or 
-                not hasattr(self.target, 'active') or 
-                not self.target.active):
-                return event
+            chars = ""
+            try:
+                chars = Cocoa.NSEvent.eventWithCGEvent_(event).characters()
+            except:
+                pass
             
             debug_log(f"Key event: keycode={keycode}, chars='{chars}'")
             
-            # Forward to target if it exists and has process_key_event method
-            if hasattr(self.target, 'process_key_event'):
-                consumed = self.target.process_key_event(keycode, chars, event)
-                if consumed:
-                    debug_log(f"Key event consumed: {keycode}")
+            # Specifically check for ESC key (keycode 53)
+            if keycode == 53:  # ESC key
+                debug_log("ESC key detected")
+                
+                # First try to close via window_controller
+                if hasattr(self.target, 'window_controller'):
+                    debug_log("Target has window_controller, calling close_window")
+                    if self.target.window_controller and hasattr(self.target.window_controller, 'close_window'):
+                        self.target.window_controller.close_window()
+                        return None  # Consume the event
+                
+                # Try window() method if available
+                if hasattr(self.target, 'window') and callable(getattr(self.target, 'window')):
+                    window = self.target.window()
+                    if window:
+                        debug_log("Closing window via target's window() method")
+                        if hasattr(window, 'close_window'):
+                            window.close_window()
+                        else:
+                            window.close()
+                        return None  # Consume the event
+                
+                # Try callback as last resort
+                if hasattr(self.target, 'callback') and self.target.callback:
+                    debug_log("Calling target's callback with None")
+                    self.target.callback(None)
                     return None  # Consume the event
+            
+            # One more safety check before forwarding
+            if not hasattr(self.target, 'process_key_event'):
+                debug_log("Target doesn't have process_key_event method, passing event through")
+                return event
+                
+            # Forward to target
+            consumed = self.target.process_key_event(keycode, chars, event)
+            if consumed:
+                debug_log(f"Key event consumed: {keycode}")
+                return None  # Consume the event
             
             return event  # Pass through the event
         except Exception as e:
@@ -145,7 +198,7 @@ class CategoryTaskView(AppKit.NSTextView):
     category_mode = objc.ivar('category_mode')
     selected_category = objc.ivar('selected_category')
     autocomplete_options = objc.ivar('autocomplete_options')
-    current_autocomplete_index = objc.ivar('current_autocomplete_index')
+    current_autocomplete_index = objc.ivar('current_autocomplete_index') 
     is_first_character = objc.ivar('is_first_character')
     placeholderAttrString = objc.ivar('placeholderAttrString')
     event_monitor = objc.ivar('event_monitor')
@@ -169,7 +222,6 @@ class CategoryTaskView(AppKit.NSTextView):
         self.event_monitor = None
         self.active = True
         
-        
         # Configure the text view appearance
         self.setEditable_(True)
         self.setSelectable_(True)
@@ -184,8 +236,17 @@ class CategoryTaskView(AppKit.NSTextView):
         self.setDrawsBackground_(True)
         self.setBackgroundColor_(AppKit.NSColor.clearColor())
         
-        # Set up insertion point color
-        self.setInsertionPointColor_(AppKit.NSColor.textColor())
+        # CRITICAL CURSOR SETTINGS
+        self.setInsertionPointColor_(AppKit.NSColor.whiteColor())  # Make cursor white for visibility
+        
+        # Disable spell checking which can interfere with cursor
+        if hasattr(self, 'setContinuousSpellCheckingEnabled_'):
+            self.setContinuousSpellCheckingEnabled_(False)
+        
+        # REMOVED: setAllowsKeyEquivalents_ as it doesn't exist in your implementation
+        
+        # Ensure proper drawing behavior
+        self.setNeedsDisplayInRect_(self.bounds())
         
         # Set up placeholder
         self.placeholderAttrString = self.createPlaceholderString_("What are you working on?")
@@ -204,22 +265,53 @@ class CategoryTaskView(AppKit.NSTextView):
         
         debug_log("CategoryTaskView: initialization complete")
         return self
-    
-    def dealloc(self):
-        """Clean up resources"""
-        debug_log("CategoryTaskView: dealloc called")
-        # Stop event monitor
-        if self.event_monitor:
-            self.event_monitor.stop()
 
+    def drawInsertionPointInRect_color_turnedOn_(self, rect, color, flag):
+        """Override to make the cursor more visible"""
+        debug_log(f"Drawing insertion point at {rect}")
+        # Make cursor wider and use white color
+        wider_rect = AppKit.NSMakeRect(
+            rect.origin.x, 
+            rect.origin.y, 
+            3.0,  # Make cursor 3 pixels wide
+            rect.size.height
+        )
         
-        self.active = False
+        # Always use white color for better visibility
+        cursor_color = AppKit.NSColor.whiteColor()
         
-        # Remove notification observer
-        nc = AppKit.NSNotificationCenter.defaultCenter()
-        nc.removeObserver_(self)
+        # Call super with our modified parameters
+        objc.super(CategoryTaskView, self).drawInsertionPointInRect_color_turnedOn_(
+            wider_rect, cursor_color, flag
+        )
+
+    def ensureCursorVisible(self):
+        """Make sure the cursor is visible and blinking"""
+        debug_log("Ensuring cursor is visible")
         
-        objc.super(CategoryTaskView, self).dealloc()
+        # Force view to redraw
+        self.setNeedsDisplay_(True)
+        
+        # Get the current selection
+        selected_range = self.selectedRange()
+        
+        # Reset selection to force cursor redraw
+        if selected_range.location != AppKit.NSNotFound:
+            current_pos = selected_range.location
+            # Toggle selection to force cursor redraw
+            self.setSelectedRange_(AppKit.NSMakeRange(0, 0))
+            self.setSelectedRange_(AppKit.NSMakeRange(current_pos, 0))
+            
+            # Make sure the cursor position is visible
+            self.scrollRangeToVisible_(selected_range)
+        else:
+            # If no selection, set cursor at end
+            text_length = len(self.string())
+            self.setSelectedRange_(AppKit.NSMakeRange(text_length, 0))
+            
+        # Explicitly set focus
+        if self.window():
+            self.window().makeFirstResponder_(self)
     
     def startEventMonitor(self):
         """Start monitoring keyboard events"""
@@ -230,17 +322,48 @@ class CategoryTaskView(AppKit.NSTextView):
         return False
     
     def stopEventMonitor(self):
-        """Stop monitoring keyboard events"""
+        """Stop monitoring keyboard events with improved cleanup"""
+        debug_log("CategoryTaskView: stopEventMonitor called")
+        
+        # Set active to false FIRST to ensure no more events are processed
+        self.active = False
+        
         if self.event_monitor:
-            self.event_monitor.stop()
+            # Now stop the monitor
+            try:
+                debug_log("Stopping event monitor from CategoryTaskView")
+                self.event_monitor.stop()
+                self.event_monitor = None
+                debug_log("Event monitor stopped from CategoryTaskView")
+            except Exception as e:
+                debug_log(f"Error stopping event monitor: {e}")
+        
+        debug_log("CategoryTaskView: stopEventMonitor completed")
+    
+    def dealloc(self):
+        """Clean up resources"""
+        debug_log("CategoryTaskView: dealloc called")
+        
+        # Stop event monitor if it exists
+        self.active = False
+        if self.event_monitor:
+            try:
+                self.event_monitor.stop()
+                self.event_monitor = None
+            except Exception as e:
+                debug_log(f"Error stopping event monitor in dealloc: {e}")
+        
+        # Remove notification observer
+        nc = AppKit.NSNotificationCenter.defaultCenter()
+        nc.removeObserver_(self)
+        
+        debug_log("CategoryTaskView: dealloc completed")
+        objc.super(CategoryTaskView, self).dealloc()
     
     def process_key_event(self, keycode, chars, event):
         """Process a key event from the global event monitor"""
         debug_log(f"Process key event: keycode={keycode}, chars='{chars}'")
         
-        # IMPORTANT: We're removing the window.isKeyWindow check since we're 
-        # using a global event monitor and we want to process events regardless
-
         # Handle arrow keys to navigate the text
         if keycode == 123:  # Left arrow
             self.moveLeft_(None)
@@ -257,20 +380,42 @@ class CategoryTaskView(AppKit.NSTextView):
                 
         # Handle Escape key to close the window
         if keycode == 53:  # Escape key
-            window = self.window()
             debug_log("Escape key detected - closing window directly")
-            if window and hasattr(window, 'close'):
-                debug_log("Calling self.close() directly")
+            window = self.window()
+            if window and hasattr(window, 'close_window'):
+                # Try to call the close_window method if it exists
+                debug_log("Calling window's close_window method")
+                window.close_window()
+            elif window and hasattr(window, 'close'):
+                debug_log("Calling window's close method")
                 window.close()
             elif self.callback:
                 debug_log("Calling callback with None for window close")
                 self.callback(None)
             return True  # Consume the event
         
-
+        # Handle CMD + A to select all text
+        if keycode == 0x00:  # 'A' key
+            modifiers = AppKit.NSEvent.modifierFlags()
+            if modifiers & AppKit.NSCommandKeyMask:
+                debug_log("CMD + A detected - selecting all text")
+                self.selectAll_(None)
+                return True
+            
         # Handle Backspace/Delete key with improved behavior
         if keycode == 51:  # Backspace key
             debug_log("Backspace key detected")
+            # Handle CMD + Backspace to clear all text
+            modifiers = AppKit.NSEvent.modifierFlags()
+            if modifiers & AppKit.NSCommandKeyMask:
+                debug_log("CMD + Backspace detected - clearing all text")
+                self.setString_("")
+                self.setSelectedRange_(AppKit.NSMakeRange(0, 0))
+                self.category_mode = False
+                self.selected_category = None
+                self.is_first_character = True
+                self.updateTextStyling()
+                return True
             
             # Get current text and selection
             text = self.string()
@@ -282,6 +427,11 @@ class CategoryTaskView(AppKit.NSTextView):
                 self.setString_(new_text)
                 self.setSelectedRange_(AppKit.NSMakeRange(selected_range.location, 0))
                 self.updateTextStyling()
+                # If that is all text, reset state
+                if len(new_text) == 0:
+                    self.category_mode = False
+                    self.selected_category = None
+                    self.is_first_character = True
                 return True
             
             # Case 2: Cursor is right after a category
@@ -294,7 +444,15 @@ class CategoryTaskView(AppKit.NSTextView):
                 self.updateTextStyling()
                 return True
             
-            # Case 3: At the "@" character in category mode
+            # Case 3: In category mode with a complete category name but not yet selected
+            if self.category_mode and text.startswith("@") and text[:selected_range.location] in [f"@{c.name}" for c in self.storage.get_categories()]:
+                # Remove the @ and clear the text
+                self.setString_("@" + text[selected_range.location:].lstrip())
+                self.setSelectedRange_(AppKit.NSMakeRange(1, 0))
+                self.updateTextStyling()
+                return True
+            
+            # Case 4: At the "@" character in category mode
             if self.category_mode and text.startswith("@") and selected_range.location == 1:
                 # Exit category mode
                 self.category_mode = False
@@ -302,11 +460,20 @@ class CategoryTaskView(AppKit.NSTextView):
                 self.updateTextStyling()
                 return True
             
-            # Case 4: Standard backspace - delete previous character
+            # Case 5: Standard backspace - delete previous character
             if selected_range.location > 0:
                 new_text = text[:selected_range.location - 1] + text[selected_range.location:]
                 self.setString_(new_text)
                 self.setSelectedRange_(AppKit.NSMakeRange(selected_range.location - 1, 0))
+                self.updateTextStyling()
+                return True
+
+            # Case 6: Empty text -- reset state from category mode
+            if len(text) == 0:
+                self.category_mode = False
+                self.selected_category = None
+                self.is_first_character = True
+                self.setString_("")
                 self.updateTextStyling()
                 return True
             
@@ -418,7 +585,8 @@ class CategoryTaskView(AppKit.NSTextView):
         """Set placeholder text with proper styling"""
         attrs = {
             AppKit.NSFontAttributeName: self.font(),
-            AppKit.NSForegroundColorAttributeName: AppKit.NSColor.placeholderTextColor()
+            AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor().colorWithAlphaComponent_(0.5)
+
         }
         self.placeholderAttrString = AppKit.NSAttributedString.alloc().initWithString_attributes_(
             placeholder_text, attrs
@@ -445,7 +613,7 @@ class CategoryTaskView(AppKit.NSTextView):
         """Create a styled placeholder string"""
         attrs = {
             AppKit.NSFontAttributeName: self.font(),
-            AppKit.NSForegroundColorAttributeName: AppKit.NSColor.placeholderTextColor()
+            AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor().colorWithAlphaComponent_(0.5)
         }
         return AppKit.NSAttributedString.alloc().initWithString_attributes_(
             placeholder_text, attrs
@@ -465,12 +633,19 @@ class CategoryTaskView(AppKit.NSTextView):
         if text.startswith("@") and len(text) > 1:
             search_text = text[1:].lower()
         
+        # If the search text entirely matches a category, this must be continuing the cycle. 
+        # Therefore we ignore and cycle next
+        if search_text and any(c.name.lower() == search_text for c in categories):
+            search_text = ""
+        
         # Filter categories by search text if present
+        print(search_text)
         if search_text:
             filtered_categories = [c for c in categories if search_text in c.name.lower()]
         else:
             filtered_categories = categories
         
+        print(filtered_categories)
         if not filtered_categories:
             debug_log("No matching categories found")
             return
@@ -1099,7 +1274,7 @@ class RainbowBorderView(AppKit.NSView):
         self.hue_offset = 0.0
         self.position_offset = 0.0
         self.animation_timer = None
-        self.border_width = 2.0
+        self.border_width = 5.0  # Increased from 2.0 to 5.0 for visibility
         self.corner_radius = 16.0
         
         # Make transparent to show content below
@@ -1186,9 +1361,9 @@ class RainbowBorderView(AppKit.NSView):
             # Calculate hue with offset
             hue = (pos + self.hue_offset) % 1.0
             
-            # Create color for this segment
+            # Create color for this segment - more vibrant colors
             color = AppKit.NSColor.colorWithCalibratedHue_saturation_brightness_alpha_(
-                hue, 0.7, 0.9, 0.8  # Pastel colors (higher brightness, lower saturation)
+                hue, 1.0, 1.0, 1.0  # Full saturation and brightness
             )
             
             # Calculate segment position
@@ -1222,18 +1397,8 @@ class RainbowBorderView(AppKit.NSView):
                 y2 = y1 - segment_length
             
             # Draw this segment in hue
-            color = AppKit.NSColor.colorWithCalibratedHue_saturation_brightness_alpha_(
-                (i / segments + self.hue_offset) % 1.0,
-                0.8,  # saturation
-                0.9,  # brightness
-                1.0   # alpha
-            )
             color.set()
-            AppKit.NSBezierPath.strokeLineFromPoint_toPoint_(
-                AppKit.NSMakePoint(x1, y1),
-                AppKit.NSMakePoint(x2, y2)
-            )
-
+            
             line_path = AppKit.NSBezierPath.bezierPath()
             line_path.moveToPoint_(AppKit.NSMakePoint(x1, y1))
             line_path.lineToPoint_(AppKit.NSMakePoint(x2, y2))
@@ -1270,6 +1435,7 @@ class TextInputWindow(AppKit.NSObject):
         self.scroll_view = None
         self.text_view = None
         self.autocomplete_view = None
+        self.activation_timer = None  # Add this
         
         # Try to create the window
         success = self.createWindow()
@@ -1277,9 +1443,42 @@ class TextInputWindow(AppKit.NSObject):
             debug_log("TextInputWindow: createWindow failed")
             return None
         
-        debug_log("TextInputWindow: initialization complete")
+        # Register for application activation notifications
+        nc = AppKit.NSNotificationCenter.defaultCenter()
+        nc.addObserver_selector_name_object_(
+            self,
+            "applicationActivationChanged:",
+            AppKit.NSApplicationDidResignActiveNotification,
+            None
+        )
+        
+        # Start a backup timer that checks app activation state
+        self.activation_timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            0.2,  # Check every 200ms
+            self,
+            "checkAppActive:",
+            None,
+            True
+        )
+        
+        debug_log("TextInputWindow: initialization complete with activation monitoring")
         return self
-
+    
+    def applicationActivationChanged_(self, notification):
+        """Called when the application activation state changes"""
+        debug_log("Application activation changed notification received")
+        if notification.name() == AppKit.NSApplicationDidResignActiveNotification:
+            debug_log("Application is no longer active - closing input window")
+            self.close_window()
+    
+    def checkAppActive_(self, timer):
+        """Backup timer to check if application is active"""
+        app = AppKit.NSApplication.sharedApplication()
+        #  isActive comes from the AppKit framework, but we should also check if the self.active is false
+        if not app.isActive() and self.window and self.window.isVisible():
+            debug_log("Timer detected application is not active - closing input window")
+            self.close_window()
+            # Don't invalidate timer here - it will be cleaned up in close_window
     def createWindow(self):
         """Create the input window with a modern Spotlight-style appearance and rainbow border"""
         try:
@@ -1287,15 +1486,41 @@ class TextInputWindow(AppKit.NSObject):
 
             # Get screen dimensions
             screen_rect = AppKit.NSScreen.mainScreen().frame()
-            window_width = 500
+            window_width = 600
             window_height = 60
 
             # Position window near the top of the screen
             window_x = (screen_rect.size.width - window_width) / 2
-            window_y = screen_rect.size.height * 0.8  # Position at 80% from bottom
+            window_y = screen_rect.size.height * 0.5  # Position at 80% from bottom
             window_frame = AppKit.NSMakeRect(window_x, window_y, window_width, window_height)
 
-            # Always use NSPanel
+            # First, create a full-screen blur overlay window
+            try:
+                debug_log("Creating blur overlay window")
+                self.blur_window = BlurOverlayWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+                    screen_rect,
+                    AppKit.NSWindowStyleMaskBorderless,
+                    AppKit.NSBackingStoreBuffered,
+                    False
+                )
+                if not self.blur_window:
+                    debug_log("Failed to create blur window")
+                else:
+                    debug_log("Blur window created successfully")
+                    self.blur_window.setCollectionBehavior_(
+                        AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces |
+                        AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+                    )
+                    # Show the blur window
+                    self.blur_window.orderFrontRegardless()
+                    debug_log("Blur window ordered front")
+            except Exception as e:
+                debug_log(f"Error creating blur window: {e}")
+                # Continue without blur window
+                self.blur_window = None
+
+            # Now create the main panel
+            debug_log("Creating main window")
             style_mask = (
                 AppKit.NSWindowStyleMaskBorderless |
                 AppKit.NSWindowStyleMaskResizable |
@@ -1318,13 +1543,10 @@ class TextInputWindow(AppKit.NSObject):
             # after you init the NSPanel
             self.window.setBecomesKeyOnlyIfNeeded_(False)
 
-
             # Configure panel appearance
             self.window.setOpaque_(False)
             self.window.setBackgroundColor_(AppKit.NSColor.clearColor())
             self.window.setHasShadow_(True)
-            # self.window.setLevel_(Quartz.CGShieldingWindowLevel())
-            # self.window.setLevel_(AppKit.NSFloatingWindowLevel)
             self.window.setLevel_(AppKit.NSStatusWindowLevel)
 
             self.window.setMovableByWindowBackground_(True)
@@ -1344,11 +1566,17 @@ class TextInputWindow(AppKit.NSObject):
             container.layer().setCornerRadius_(20.0)
             container.layer().setMasksToBounds_(False)
 
-            # Rainbow border
-            self.rainbow_border = RainbowBorderView.alloc().initWithFrame_(
-                AppKit.NSMakeRect(-2, -2, window_width + 4, window_height + 4)
-            )
-            container.addSubview_(self.rainbow_border)
+            # Rainbow border with increased size
+            try:
+                debug_log("Creating rainbow border")
+                self.rainbow_border = RainbowBorderView.alloc().initWithFrame_(
+                    AppKit.NSMakeRect(-5, -5, window_width + 10, window_height + 10)  # Larger to be more visible
+                )
+                container.addSubview_(self.rainbow_border)
+                debug_log("Rainbow border created")
+            except Exception as e:
+                debug_log(f"Error creating rainbow border: {e}")
+                self.rainbow_border = None  # Continue without rainbow border
 
             # Frosted glass background
             effect = AppKit.NSVisualEffectView.alloc().initWithFrame_(
@@ -1374,10 +1602,23 @@ class TextInputWindow(AppKit.NSObject):
             self.scroll_view.setDrawsBackground_(False)
             effect.addSubview_(self.scroll_view)
 
+            # Create the text view with proper configuration for cursor
+            debug_log("Creating text view")
             text_frame = AppKit.NSMakeRect(0, 0, scroll_frame.size.width, scroll_frame.size.height)
+            
+            # IMPORTANT: Use the correct initialization method based on your CategoryTaskView implementation
             self.text_view = CategoryTaskView.alloc().initWithFrame_callback_storage_(
                 text_frame, self.callback, self.storage
             )
+            
+            if not self.text_view:
+                debug_log("Failed to create text view")
+                raise RuntimeError("Failed to create text view")
+            
+            # Give the text view a reference to this window controller for escape handling
+            debug_log("Setting window controller reference in text view")
+            self.text_view.window_controller = self
+            
             self.text_view.setTextContainerInset_(
                 AppKit.NSMakeSize(5, (scroll_frame.size.height - 20) / 2)
             )
@@ -1391,19 +1632,23 @@ class TextInputWindow(AppKit.NSObject):
             effect.addSubview_(self.autocomplete_view)
 
             # Key event monitor for ESC/ENTER
+            debug_log("Starting event monitor")
             self.text_view.startEventMonitor()
 
             # Start rainbow animation
-            self.rainbow_border.startAnimation()
+            if self.rainbow_border:
+                debug_log("Starting rainbow animation")
+                self.rainbow_border.startAnimation()
 
             # Show and focus
+            debug_log("Setting window focus")
             AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
             self.window.orderFrontRegardless()
             self.window.makeKeyWindow()
             self.window.makeKeyAndOrderFront_(None)
             self.window.makeFirstResponder_(self.text_view)
 
-            # Ensure focus persists briefly
+            # Ensure focus persists
             AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
                 0.1, self, 'ensureFocus:', None, False
             )
@@ -1412,17 +1657,22 @@ class TextInputWindow(AppKit.NSObject):
             return True
         except Exception as e:
             debug_log(f"TextInputWindow: Error creating window: {e}")
+            
+            # Cleanup any partially created resources
+            if hasattr(self, 'blur_window') and self.blur_window:
+                debug_log("Cleaning up blur window after error")
+                try:
+                    self.blur_window.close()
+                    self.blur_window = None
+                except:
+                    pass
+            
             return False
         
     def canBecomeKeyWindow(self):
         return True
     def canBecomeMainWindow(self):
         return True
-
-    def windowDidResignKey_(self, notification):
-        # Close on focus loss as if ESC pressed
-        print("BRUH")
-        self.close_window()
     
     def ensureFocus_(self, timer):
         """Ensure text view has focus"""
@@ -1535,25 +1785,14 @@ class TextInputWindow(AppKit.NSObject):
             self.window_focused = True
             if self.rainbow_border:
                 self.rainbow_border.startAnimation()
-                
+                    
     def windowDidResignKey_(self, notification):
-        debug_log("Window lost focus—closing input")  
-        """Called when window loses focus"""
-        self.close_window()
-        if notification.object() == self.window:
-            debug_log("Window lost focus")
-            self.window_focused = False
-            window = self.window
-            # close window
-            if window and hasattr(window, "close"):
-                window.close()
-
-        if self.text_view:
-            self.text_view.stopEventMonitor()
-        
-        # Pause rainbow animation when not focused
-        if self.rainbow_border:
-            self.rainbow_border.stopAnimation()
+            """Called when window loses focus"""
+            debug_log("Window lost focus - closing input window")
+            # Only handle if it's our window
+            if notification.object() == self.window:
+                # Close the window immediately
+                self.close_window()
     
     def windowShouldClose_(self, sender):
         """Handle window closing"""
@@ -1575,48 +1814,153 @@ class TextInputWindow(AppKit.NSObject):
             self.window.setDelegate_(None)
     
     def close_window(self):
-        """Safely close the window"""
+        """Safely close the window and clean up all resources"""
         debug_log("TextInputWindow: close_window called")
         try:
             # First check if window exists
             if not self.window:
+                self.active = False
                 debug_log("Window already closed")
                 return
             
             # Store local references
             window = self.window
+            blur_window = self.blur_window if hasattr(self, 'blur_window') else None
             callback = self.callback
             
-            # Stop event monitor
+            # Stop event monitor FIRST before closing anything
             if self.text_view:
+                debug_log("Stopping event monitor")
                 try:
                     self.text_view.stopEventMonitor()
+                    self.text_view.active = False  # Critical: disable any event processing
                 except Exception as e:
                     debug_log(f"Error stopping event monitor: {e}")
             
-            # Clear all references to avoid retain cycles
-            self.window = None
-            self.text_view = None
-            self.autocomplete_view = None
-            self.scroll_view = None
-            self.callback = None  # Clear the callback reference
+            # Stop rainbow animation if active
+            if hasattr(self, 'rainbow_border') and self.rainbow_border:
+                try:
+                    self.rainbow_border.stopAnimation()
+                except Exception as e:
+                    debug_log(f"Error stopping rainbow animation: {e}")
             
-            # Call the callback after clearing references
+            # Clear all references to avoid retain cycles
+            self.window.setDelegate_(None)  # Remove delegate first
+            
+            # Call the callback with None (cancelled)
             if callback:
                 try:
                     debug_log("Calling callback with None (window closing)")
-                    callback(None)  # Use the stored reference
+                    # Save reference for later to avoid early cleanup
+                    temp_callback = callback
+                    self.callback = None  # Clear the reference
+                    temp_callback(None)  # Use the saved reference
                 except Exception as e:
                     debug_log(f"Error calling callback during window close: {e}")
             
-            # Now close the window using orderOut instead of close for more reliability
+            # Now close the windows
             try:
-                debug_log("Closing window using orderOut")
+                debug_log("Hiding main window")
                 window.orderOut_(None)  # This immediately hides the window
+                
+                # Close the blur window if it exists
+                debug_log("Checking for blur window")
+                if blur_window:
+                    debug_log("Closing blur window")
+                    blur_window.orderOut_(None)
+                    blur_window.close()
+                    self.blur_window = None
+                
+                # Ensure the app returns to accessory mode
+                app = AppKit.NSApplication.sharedApplication()
+                app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+                
+                debug_log("Closing main window")
                 window.close()  # This actually closes the window
+                
+                # Important: Clear these references AFTER closing windows
+                self.window = None
+                self.text_view = None
+                self.autocomplete_view = None
+                self.scroll_view = None
+                self.active = False
+
             except Exception as e:
                 debug_log(f"Error closing window: {e}")
             
             debug_log("Window closed successfully")
         except Exception as e:
             debug_log(f"Error in close_window: {e}")
+    
+    def dealloc(self):
+        """Clean up resources"""
+        debug_log("TextInputWindow: dealloc called")
+        
+        # Stop timer if still active
+        if self.activation_timer:
+            self.activation_timer.invalidate()
+            self.activation_timer = None
+        
+        # Remove notification observer
+        nc = AppKit.NSNotificationCenter.defaultCenter()
+        nc.removeObserver_(self)
+        
+        # Call super dealloc
+        objc.super(TextInputWindow, self).dealloc()
+
+class BlurOverlayWindow(AppKit.NSWindow):
+    """A window that provides a very subtle full-screen dimming effect"""
+    
+    def initWithContentRect_styleMask_backing_defer_(self, rect, style, backing, defer):
+        self = objc.super(BlurOverlayWindow, self).initWithContentRect_styleMask_backing_defer_(
+            rect, style, backing, defer
+        )
+        if self is None:
+            return None
+        
+        debug_log("Initializing BlurOverlayWindow")
+        
+        # Configure the window
+        self.setOpaque_(False)
+        self.setBackgroundColor_(AppKit.NSColor.clearColor())
+        self.setHasShadow_(False)
+        self.setLevel_(AppKit.NSStatusWindowLevel - 1)  # Just below the main window
+        self.setIgnoresMouseEvents_(True)  # Allow clicking through
+        self.setAlphaValue_(0.7)  # Make the whole window slightly transparent
+        
+        # OPTION 1: Use NSVisualEffectView with ultraLight material for minimal blur
+        content_view = AppKit.NSVisualEffectView.alloc().initWithFrame_(rect)
+        if hasattr(AppKit.NSVisualEffectMaterial, 'sheet'):  # Use sheet material which is very subtle
+            content_view.setMaterial_(AppKit.NSVisualEffectMaterial.sheet)
+        else:
+            content_view.setMaterial_(AppKit.NSVisualEffectMaterialLight)  # Fallback to light
+            
+        content_view.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
+        content_view.setState_(AppKit.NSVisualEffectStateActive)
+        content_view.setWantsLayer_(True)
+        
+        # Add an extremely subtle tint
+        overlay = AppKit.NSView.alloc().initWithFrame_(rect)
+        overlay.setWantsLayer_(True)
+        
+        # Just a hint of darkening (1% opacity)
+        overlay.layer().setBackgroundColor_(
+            AppKit.NSColor.blackColor().colorWithAlphaComponent_(0.3).CGColor()
+        )
+        content_view.addSubview_(overlay)
+        
+        self.setContentView_(content_view)
+        
+        debug_log("BlurOverlayWindow initialized successfully")
+        return self
+    
+    def orderOut_(self, sender):
+        """Override to ensure the window is properly hidden"""
+        debug_log("BlurOverlayWindow: orderOut_ called")
+        objc.super(BlurOverlayWindow, self).orderOut_(sender)
+    
+    def close(self):
+        """Override to ensure the window is properly closed"""
+        debug_log("BlurOverlayWindow: close called")
+        # objc.super(BlurOverlayWindow, self).close()
+        pass

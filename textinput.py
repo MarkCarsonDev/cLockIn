@@ -727,6 +727,10 @@ class CategoryTaskView(AppKit.NSTextView):
         
         if text.startswith(prefix):
             task_part = text[len(prefix):].lower()
+
+        # If the task part is equal to a complete task name, we need to cycle to the next task
+        if task_part and any(t.name.lower() == task_part for t in tasks):
+            task_part = ""
         
         # Filter tasks if we have input
         if task_part:
